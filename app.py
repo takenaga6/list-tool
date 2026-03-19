@@ -8,6 +8,7 @@ import subprocess
 import sys
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 import io as _io_mod
 import json as _json_mod
@@ -19,15 +20,15 @@ _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 # ページ設定
 # ──────────────────────────────
 st.set_page_config(
-    page_title="Offi-Stretch テレアポ管理",
-    page_icon="📞",
+    page_title="Offi-Stretch リスト管理",
+    page_icon="📋",
     layout="wide",
 )
 
-st.title("📞 Offi-Stretch テレアポ管理")
+st.title("📋 Offi-Stretch リスト管理")
 
 tab_call, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
-    ["📞 コール記録", "📋 履歴", "📊 分析", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
+    ["📞 架電記録", "📋 履歴", "📊 分析", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
 )
 
 
@@ -293,7 +294,7 @@ pip install gspread google-auth
 # TAB1: コール記録
 # ──────────────────────────────
 with tab_call:
-    st.subheader("テレアポ結果を記録する")
+    st.subheader("架電結果を記録する")
     ctab_manual, ctab_csv = st.tabs(["✏️ 手動入力", "📥 CSVインポート"])
 
     with ctab_manual:
@@ -313,8 +314,8 @@ with tab_call:
                 company_name = st.text_input("会社名", placeholder="株式会社〇〇")
 
             approach_result = st.selectbox(
-                "アポ結果",
-                ["断り", "アポ獲得", "留守", "後日折り返し", "その他"],
+                "架電結果",
+                ["社長NG", "受付NG", "取材NG", "担当NG", "社長アポ", "担当アポ", "資料送付", "追客", "不通リスト", "追わない", "日程調整中", "触るな危険"],
             )
 
             rejection_reason = ""
@@ -324,10 +325,11 @@ with tab_call:
                     ["既導入", "興味なし", "予算なし", "タイミング", "担当不在", "その他"],
                 )
 
-            temperature = st.select_slider(
-                "温度感",
-                options=["低", "中", "高"],
-                value="低",
+            prospect_rank = st.selectbox(
+                "見込みランク",
+                options=["なし", "C", "B", "A"],
+                index=0,
+                help="A=有望　B=可能性あり　C=低見込み",
             )
 
             company_scale = st.selectbox(
@@ -357,7 +359,7 @@ with tab_call:
                 approach_result=approach_result,
                 got_appointment=got_appointment,
                 rejection_reason=rejection_reason,
-                temperature=temperature,
+                temperature=prospect_rank,
                 company_scale=company_scale,
                 ng_reason=ng_reason,
                 good_points=good_points,
@@ -376,10 +378,10 @@ with tab_call:
                 if c in recent.columns
             ]
             st.dataframe(
-                recent[display_cols],
+                recent[display_cols].rename(columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}),
                 use_container_width=True,
                 hide_index=True,
-        )
+            )
         else:
             st.caption("まだ記録がありません")
 
@@ -527,7 +529,7 @@ with tab_call:
 # TAB2: 履歴
 # ──────────────────────────────
 with tab_history:
-    st.subheader("コール履歴")
+    st.subheader("架電履歴")
 
     df_fb = load_feedback()
 
@@ -538,13 +540,13 @@ with tab_history:
         col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             filter_result = st.multiselect(
-                "アポ結果で絞り込み",
+                "架電結果で絞り込み",
                 options=df_fb["アプローチ結果"].dropna().unique().tolist(),
             )
         with col_f2:
-            filter_temp = st.multiselect(
-                "温度感で絞り込み",
-                options=["高", "中", "低"],
+            filter_rank = st.multiselect(
+                "見込みランクで絞り込み",
+                options=["A", "B", "C", "なし"],
             )
         with col_f3:
             search_name = st.text_input("会社名で検索")
@@ -552,13 +554,15 @@ with tab_history:
         filtered = df_fb.copy()
         if filter_result:
             filtered = filtered[filtered["アプローチ結果"].isin(filter_result)]
-        if filter_temp:
-            filtered = filtered[filtered["温度感"].isin(filter_temp)]
+        if filter_rank:
+            filtered = filtered[filtered["温度感"].isin(filter_rank)]
         if search_name:
             filtered = filtered[filtered["会社名"].str.contains(search_name, na=False)]
 
         st.dataframe(
-            filtered.sort_values("記録日", ascending=False),
+            filtered.sort_values("記録日", ascending=False).rename(
+                columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}
+            ),
             use_container_width=True,
             hide_index=True,
         )
@@ -577,7 +581,7 @@ with tab_history:
 # TAB3: 分析
 # ──────────────────────────────
 with tab_analysis:
-    st.subheader("テレアポ傾向分析")
+    st.subheader("架電傾向分析")
 
     df_fb = load_feedback()
 
@@ -590,27 +594,39 @@ with tab_analysis:
 
         # KPI
         col_k1, col_k2, col_k3, col_k4 = st.columns(4)
-        col_k1.metric("総コール数", f"{total}件")
+        col_k1.metric("総架電数", f"{total}件")
         col_k2.metric("アポ獲得数", f"{apo_count}件")
         col_k3.metric("アポ獲得率", f"{apo_rate:.1f}%")
-        high_temp = (df_fb["温度感"] == "高").sum()
-        col_k4.metric("温度感「高」", f"{high_temp}件")
+        rank_a = (df_fb["温度感"] == "A").sum()
+        col_k4.metric("見込みランクA", f"{rank_a}件")
 
         st.divider()
 
         col_g1, col_g2 = st.columns(2)
 
         with col_g1:
-            st.markdown("**アポ結果の内訳**")
-            result_counts = df_fb["アプローチ結果"].value_counts()
-            st.bar_chart(result_counts)
+            st.markdown("**架電結果の内訳**")
+            result_counts = df_fb["アプローチ結果"].value_counts().reset_index()
+            result_counts.columns = ["結果", "件数"]
+            chart_r = alt.Chart(result_counts).mark_bar(color="#4C78A8").encode(
+                x=alt.X("結果:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
+                y=alt.Y("件数:Q"),
+                tooltip=["結果", "件数"],
+            ).properties(height=250)
+            st.altair_chart(chart_r, use_container_width=True)
 
         with col_g2:
             st.markdown("**断り理由の内訳**")
             rejection_df = df_fb[df_fb["断り理由"].notna() & (df_fb["断り理由"] != "")]
             if not rejection_df.empty:
-                rejection_counts = rejection_df["断り理由"].value_counts()
-                st.bar_chart(rejection_counts)
+                rejection_counts = rejection_df["断り理由"].value_counts().reset_index()
+                rejection_counts.columns = ["理由", "件数"]
+                chart_rej = alt.Chart(rejection_counts).mark_bar(color="#F58518").encode(
+                    x=alt.X("理由:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
+                    y=alt.Y("件数:Q"),
+                    tooltip=["理由", "件数"],
+                ).properties(height=250)
+                st.altair_chart(chart_rej, use_container_width=True)
             else:
                 st.caption("断りデータなし")
 
@@ -694,7 +710,14 @@ with tab_analysis:
                             st.metric(f"{rank}ランク", f"{r:.1f}%", f"{s['apo']}/{s['total']}件")
                 with col_r2:
                     if not rank_df.empty:
-                        st.bar_chart(rank_df)
+                        rank_chart_df = rank_df.reset_index()
+                        rank_chart_df.columns = ["ランク", "アポ率(%)"]
+                        chart_rank = alt.Chart(rank_chart_df).mark_bar(color="#54A24B").encode(
+                            x=alt.X("ランク:N", sort=None, axis=alt.Axis(labelAngle=0, labelFontSize=14)),
+                            y=alt.Y("アポ率(%):Q"),
+                            tooltip=["ランク", "アポ率(%)"],
+                        ).properties(height=200)
+                        st.altair_chart(chart_rank, use_container_width=True)
 
             # シグナル別アポ率
             if signal_stats:
@@ -722,17 +745,19 @@ with tab_analysis:
 
         st.divider()
 
-        # 温度感「高」「中」の企業一覧（次のフォロー候補）
-        st.markdown("**温度感「高」「中」の企業（フォロー候補）**")
-        warm = df_fb[df_fb["温度感"].isin(["高", "中"])].sort_values("温度感", ascending=False)
+        # 見込みランクA・Bの企業一覧（次のフォロー候補）
+        st.markdown("**見込みランクA・Bの企業（フォロー候補）**")
+        warm = df_fb[df_fb["温度感"].isin(["A", "B"])].sort_values("温度感")
         if not warm.empty:
             st.dataframe(
-                warm[["記録日", "会社名", "アプローチ結果", "温度感", "断り理由", "反応が良かったポイント", "メモ"]],
+                warm[["記録日", "会社名", "アプローチ結果", "温度感", "断り理由", "反応が良かったポイント", "メモ"]].rename(
+                    columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}
+                ),
                 use_container_width=True,
                 hide_index=True,
             )
         else:
-            st.caption("温度感「高」「中」の記録なし")
+            st.caption("見込みランクA・Bの記録なし")
 
         # アポ獲得企業一覧
         st.markdown("**アポ獲得企業一覧**")
@@ -1039,10 +1064,50 @@ def load_meetings() -> pd.DataFrame:
     ])
 
 
+_MEETING_FIELDS_FILE = os.path.join(OUTPUT_DIR, "meeting_fields.json")
+
+
+def load_meeting_custom_fields() -> list[dict]:
+    """カスタム商談項目の定義を読み込む"""
+    if os.path.exists(_MEETING_FIELDS_FILE):
+        try:
+            with open(_MEETING_FIELDS_FILE, "r", encoding="utf-8") as f:
+                return _json_mod.load(f).get("custom_fields", [])
+        except Exception:
+            pass
+    return []
+
+
+def save_meeting_custom_fields(fields: list[dict]):
+    """カスタム商談項目の定義を保存する"""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(_MEETING_FIELDS_FILE, "w", encoding="utf-8") as f:
+        _json_mod.dump({"custom_fields": fields}, f, ensure_ascii=False, indent=2)
+
+
+def _ensure_meetings_columns(new_cols: list[str]):
+    """meetings.csv に新しい列を追加（既存データ保持）"""
+    if not os.path.exists(MEETINGS_FILE):
+        return
+    try:
+        df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig", dtype=str).fillna("")
+        added = False
+        for col in new_cols:
+            if col not in df.columns:
+                df[col] = ""
+                added = True
+        if added:
+            df.to_csv(MEETINGS_FILE, index=False, encoding="utf-8-sig")
+    except Exception:
+        pass
+
+
 with tab_meeting:
     st.subheader("商談記録")
 
-    mtab_input, mtab_list, mtab_pipeline, mtab_csv = st.tabs(["✏️ 新規入力", "📋 一覧・検索", "📊 パイプライン", "📥 CSVインポート"])
+    mtab_input, mtab_list, mtab_pipeline, mtab_csv, mtab_settings = st.tabs(
+        ["✏️ 新規入力", "📋 一覧・検索", "📊 パイプライン", "📥 CSVインポート", "⚙️ 項目設定"]
+    )
 
     # ── 新規入力 ───────────────────────────────────────────────
     with mtab_input:
@@ -1085,6 +1150,24 @@ with tab_meeting:
 
         m_memo = st.text_area("メモ", placeholder="ヒアリング内容・懸念点・提案内容など", height=100)
 
+        # カスタム項目のレンダリング
+        m_custom_values: dict = {}
+        _custom_fields = load_meeting_custom_fields()
+        if _custom_fields:
+            st.divider()
+            st.caption("カスタム項目")
+            _cf_col1, _cf_col2 = st.columns(2)
+            for _i, _cf in enumerate(_custom_fields):
+                _fname = _cf["name"]
+                _ftype = _cf.get("type", "text")
+                _container = _cf_col1 if _i % 2 == 0 else _cf_col2
+                with _container:
+                    if _ftype == "selectbox":
+                        _opts = [o.strip() for o in _cf.get("options", "").split(",") if o.strip()]
+                        m_custom_values[_fname] = st.selectbox(_fname, [""] + _opts, key=f"m_cf_{_fname}")
+                    else:
+                        m_custom_values[_fname] = st.text_input(_fname, key=f"m_cf_{_fname}")
+
         m_submitted = st.button("✅ 商談を記録する", type="primary", disabled=not m_company)
 
         if m_submitted and m_company:
@@ -1098,6 +1181,7 @@ with tab_meeting:
                 next_action=m_next_action,
                 deal_size=m_deal_size,
                 memo=m_memo,
+                extra_fields=m_custom_values if m_custom_values else None,
             )
             st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}")
             st.rerun()
@@ -1169,13 +1253,25 @@ with tab_meeting:
             col_p1, col_p2 = st.columns(2)
             with col_p1:
                 st.markdown("**フェーズ別件数**")
-                phase_counts = df_mt["フェーズ"].value_counts()
-                st.bar_chart(phase_counts)
+                phase_df = df_mt["フェーズ"].value_counts().reset_index()
+                phase_df.columns = ["フェーズ", "件数"]
+                chart_p = alt.Chart(phase_df).mark_bar(color="#4C78A8").encode(
+                    x=alt.X("フェーズ:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    y=alt.Y("件数:Q"),
+                    tooltip=["フェーズ", "件数"],
+                ).properties(height=250)
+                st.altair_chart(chart_p, use_container_width=True)
 
             with col_p2:
                 st.markdown("**商談結果の内訳**")
-                result_counts = df_mt["商談結果"].value_counts()
-                st.bar_chart(result_counts)
+                mresult_df = df_mt["商談結果"].value_counts().reset_index()
+                mresult_df.columns = ["商談結果", "件数"]
+                chart_mr = alt.Chart(mresult_df).mark_bar(color="#72B7B2").encode(
+                    x=alt.X("商談結果:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    y=alt.Y("件数:Q"),
+                    tooltip=["商談結果", "件数"],
+                ).properties(height=250)
+                st.altair_chart(chart_mr, use_container_width=True)
 
             # 次のアクションが必要な案件
             st.divider()
@@ -1270,6 +1366,23 @@ with tab_meeting:
                 m_col_next    = m_pick("次のアクション", ["次", "アクション", "todo"])
                 m_col_memo    = m_pick("メモ",         ["メモ", "備考", "内容"])
 
+            # カスタム項目のマッピング
+            _cf_list_import = load_meeting_custom_fields()
+            _cf_mappings: dict = {}
+            if _cf_list_import:
+                st.markdown("**カスタム項目のマッピング**")
+                _cfc1, _cfc2 = st.columns(2)
+                for _cfi, _cff in enumerate(_cf_list_import):
+                    _cfname = _cff["name"]
+                    _cf_saved_val = m_map.get(_cfname)
+                    _cf_default = _cf_saved_val if (_cf_saved_val and _cf_saved_val in m_cols) else \
+                        next((col for col in m_df_raw.columns if _cfname in col), "（使わない）")
+                    _cf_container = _cfc1 if _cfi % 2 == 0 else _cfc2
+                    with _cf_container:
+                        _cf_mappings[_cfname] = st.selectbox(
+                            _cfname, m_cols, index=m_cols.index(_cf_default), key=f"mmap_cf_{_cfname}"
+                        )
+
             m_contract_kw = st.text_input(
                 "契約と判定するキーワード（カンマ区切り）",
                 value=m_saved.get("contract_keywords", "契約,成約,クロージング完了"),
@@ -1283,7 +1396,7 @@ with tab_meeting:
                     return None
                 result = row.get(m_col_result, "").strip() if m_col_result != "（使わない）" else ""
                 from datetime import date as _date
-                return {
+                base = {
                     "記録日":   str(_date.today()),
                     "商談日":   row.get(m_col_mdate,   "").strip() if m_col_mdate   != "（使わない）" else "",
                     "会社名":   company,
@@ -1295,6 +1408,9 @@ with tab_meeting:
                     "規模感・金額":   row.get(m_col_deal,  "").strip() if m_col_deal  != "（使わない）" else "",
                     "メモ":     row.get(m_col_memo,    "").strip() if m_col_memo    != "（使わない）" else "",
                 }
+                for _cfn, _cfcol in _cf_mappings.items():
+                    base[_cfn] = row.get(_cfcol, "").strip() if _cfcol != "（使わない）" else ""
+                return base
 
             m_preview = [r for r in (m_convert(row) for _, row in m_df_raw.iterrows()) if r]
             st.markdown(f"**変換プレビュー（先頭3件）** ※合計 {len(m_preview)} 件")
@@ -1330,3 +1446,65 @@ with tab_meeting:
                     })
                     st.success(f"✅ {len(m_new)}件を取り込みました。設定を記憶しました。")
                     st.rerun()
+
+    # ── 項目設定 ────────────────────────────────────────────────
+    with mtab_settings:
+        st.subheader("商談項目のカスタマイズ")
+        st.caption("デフォルト項目（商談日・会社名・フェーズなど）に加えて、独自の項目を追加できます。追加した項目は「新規入力」フォームとCSVインポートの列マッピングに反映されます。")
+
+        _cf_list = load_meeting_custom_fields()
+
+        with st.expander("デフォルト項目（変更不可）", expanded=False):
+            for _default in ["商談日", "会社名", "担当者名", "フェーズ", "商談結果", "次のアクション", "規模感・金額", "メモ"]:
+                st.write(f"• {_default}")
+
+        st.divider()
+
+        if _cf_list:
+            st.markdown("**追加済みカスタム項目**")
+            for _ci, _cf in enumerate(_cf_list):
+                _c1, _c2, _c3 = st.columns([3, 3, 1])
+                with _c1:
+                    st.write(f"**{_cf['name']}**")
+                with _c2:
+                    if _cf.get("type") == "selectbox":
+                        st.caption(f"選択肢: {_cf.get('options', '')}")
+                    else:
+                        st.caption("テキスト入力")
+                with _c3:
+                    if st.button("削除", key=f"del_cf_{_ci}"):
+                        _cf_list.pop(_ci)
+                        save_meeting_custom_fields(_cf_list)
+                        st.rerun()
+        else:
+            st.info("カスタム項目はまだありません。")
+
+        st.divider()
+        st.markdown("**新しい項目を追加**")
+
+        _add_col1, _add_col2 = st.columns(2)
+        with _add_col1:
+            _new_name = st.text_input("項目名", placeholder="例: 予算感 / 担当部署 / 決裁者")
+        with _add_col2:
+            _new_type = st.radio("入力タイプ", ["テキスト入力", "選択肢"], horizontal=True, key="cf_type_radio")
+
+        _new_options = ""
+        if _new_type == "選択肢":
+            _new_options = st.text_input("選択肢をカンマ区切りで入力", placeholder="例: 社長,部長,担当者")
+
+        if st.button("➕ 項目を追加", type="primary", disabled=not _new_name):
+            _existing_names = [_cf["name"] for _cf in _cf_list]
+            if _new_name in _existing_names:
+                st.warning("同じ名前の項目がすでに存在します。")
+            else:
+                _new_cf: dict = {
+                    "name": _new_name,
+                    "type": "selectbox" if _new_type == "選択肢" else "text",
+                }
+                if _new_type == "選択肢":
+                    _new_cf["options"] = _new_options
+                _cf_list.append(_new_cf)
+                save_meeting_custom_fields(_cf_list)
+                _ensure_meetings_columns([_new_name])
+                st.success(f"「{_new_name}」を追加しました。")
+                st.rerun()

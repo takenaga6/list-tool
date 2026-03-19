@@ -212,17 +212,17 @@ def record_feedback(
         from agents.keyword_agent import record_ng, record_rank_result
 
         if query:
-            # 低見込み or 断りは NG としてクエリ学習に反映
-            if temperature == "低" or approach_result == "断り":
+            # 低見込み(C/なし) or 断りは NG としてクエリ学習に反映
+            if temperature in ("C", "なし", "") or approach_result == "断り":
                 record_ng(query)
-            # アポ獲得 or 高見込みは良いクエリとして記録
-            if got_appointment or temperature == "高":
+            # アポ獲得 or Aランクは良いクエリとして記録
+            if got_appointment or temperature == "A":
                 record_rank_result(query, "A")
-            elif temperature == "中":
+            elif temperature == "B":
                 record_rank_result(query, "B")
 
         # ドメインを除外リストに入れて今後の検索から除外
-        if temperature == "低" or approach_result == "断り" or (ng_reason and ng_reason != "なし"):
+        if temperature in ("C", "なし", "") or approach_result == "断り" or (ng_reason and ng_reason != "なし"):
             domain = _find_domain_for_company(company_name)
             if domain:
                 excludes = load_exclude_list_csv()
@@ -242,21 +242,41 @@ def record_meeting(
     next_action: str = "",
     deal_size: str = "",
     memo: str = "",
+    extra_fields: dict | None = None,
 ):
-    """商談結果を meetings.csv に記録する。"""
+    """商談結果を meetings.csv に記録する。extra_fields でカスタム項目を追加できる。"""
     import csv as _csv
     from datetime import datetime as _dt
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    file_exists = os.path.exists(MEETINGS_FILE) and os.path.getsize(MEETINGS_FILE) > 0
-    fieldnames = [
+
+    extra = extra_fields or {}
+
+    # 既存CSVのヘッダーを取得して列を引き継ぐ
+    existing_fields: list[str] = []
+    if os.path.exists(MEETINGS_FILE) and os.path.getsize(MEETINGS_FILE) > 0:
+        try:
+            with open(MEETINGS_FILE, "r", encoding="utf-8-sig") as f:
+                reader = _csv.reader(f)
+                existing_fields = next(reader, [])
+        except Exception:
+            pass
+
+    base_fieldnames = [
         "記録日", "商談日", "会社名", "担当者名", "フェーズ",
         "商談結果", "契約", "次のアクション", "規模感・金額", "メモ"
     ]
+    all_fields = list(existing_fields) if existing_fields else list(base_fieldnames)
+    for key in extra:
+        if key not in all_fields:
+            all_fields.append(key)
+
+    file_exists = os.path.exists(MEETINGS_FILE) and os.path.getsize(MEETINGS_FILE) > 0
+
     with open(MEETINGS_FILE, "a", newline="", encoding="utf-8-sig") as f:
-        writer = _csv.DictWriter(f, fieldnames=fieldnames)
+        writer = _csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()
-        writer.writerow({
+        row: dict = {
             "記録日":       _dt.now().strftime("%Y-%m-%d"),
             "商談日":       meeting_date,
             "会社名":       company_name,
@@ -267,7 +287,9 @@ def record_meeting(
             "次のアクション": next_action,
             "規模感・金額":  deal_size,
             "メモ":         memo,
-        })
+        }
+        row.update(extra)
+        writer.writerow(row)
 
 
 def load_learned_excludes() -> set[str]:
