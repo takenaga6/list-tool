@@ -1,0 +1,18 @@
+# 秘匿情報
+.env
+
+# 出力ファイル（会社情報・ログ）
+output/
+
+# Pythonキャッシュ
+__pycache__/
+*.pyc
+*.pyo
+
+# デバッグ用
+debug_*.html
+debug_*.py
+
+# OS
+.DS_Store
+Thumbs.db
