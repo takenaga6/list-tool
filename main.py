@@ -1265,8 +1265,9 @@ def update_overview_docs():
 **ランク基準:** A=6点以上 / B=4〜5点 / C=2〜3点
 
 **自動登録・スキップ閾値:**
-- スコア **{AUTO_REGISTER_SCORE}点以上** かつ 信頼度{AUTO_REGISTER_CONFIDENCE}以上 → 確認モードでも自動登録
-- スコア **{MIN_PENDING_SCORE}点未満** または 必須フィールド不足 → 候補リストにも出さず自動スキップ"""
+- スコア **{AUTO_REGISTER_SCORE}点以上** かつ 信頼度{AUTO_REGISTER_CONFIDENCE}以上 かつ **必須4フィールド全揃い（会社名・URL・電話・従業員数）** → 自動登録
+- スコア **{MIN_PENDING_SCORE}点未満** または pending最低条件（会社名＋電話or住所）不足 → 候補リストにも出さず自動スキップ
+- 上記以外（中間スコア or フィールド不足） → `pending_review.json` に蓄積して確認待ち"""
 
     # ── マーカー置換 ──────────────────────────────────────────────
     updates = {
