@@ -21,6 +21,7 @@ from config import (
     MAX_WORKERS,
     NG_LIST_FILE,
     RESULTS_FILE,
+    RESULTS_WITH_QUERY_FILE,
     TIME_PERIOD_TBS,
     TIME_PERIODS,
     OUTPUT_DIR,
@@ -552,8 +553,16 @@ def process_one_company(
 
         score = rank_result["score"]
         confidence = company_info.get("_confidence", 0)
+        # pending リスト追加の最低条件（会社名＋電話or住所）
         has_min_fields = bool(company_info.get("company_name")) and (
             bool(company_info.get("phone")) or bool(company_info.get("address"))
+        )
+        # 自動登録の必須条件（会社名・URL・電話番号・従業員数がすべて揃っていること）
+        has_auto_fields = (
+            bool(company_info.get("company_name"))
+            and bool(company_info.get("company_url"))
+            and bool(company_info.get("phone"))
+            and bool(company_info.get("employee_count"))
         )
 
         # スコアが低すぎる or 必須フィールド不足 → 候補にも出さない
@@ -565,8 +574,8 @@ def process_one_company(
             record_ng(search_result["search_query"])
             return "ng"
 
-        # スコアが高く信頼度も十分 → 確認モードでも自動登録
-        if score >= AUTO_REGISTER_SCORE and confidence >= AUTO_REGISTER_CONFIDENCE and has_min_fields:
+        # スコアが高く信頼度も十分かつ必須フィールド全揃い → 確認モードでも自動登録
+        if score >= AUTO_REGISTER_SCORE and confidence >= AUTO_REGISTER_CONFIDENCE and has_auto_fields:
             is_dup = hubspot.check_duplicate(
                 company_name=company_info["company_name"],
                 domain=company_domain,
@@ -1018,6 +1027,182 @@ def run_daemon(interval_minutes: int = 60):
         logger.info(f"[DAEMON] stopped by user after {cycle} cycles, total={total_stats['success']}")
     finally:
         results_file.close()
+
+
+def run_list_daemon(interval_minutes: int = 60):
+    """
+    リストアップ専用デーモンモード。
+    - 高スコア＋必須フィールド全揃い → 自動登録（HubSpot）
+    - 中間スコア → pending_review.json に蓄積（上書きせず追記）
+    - Ctrl+C で安全に停止
+
+    Usage:
+        python main.py --list-daemon
+        python main.py --list-daemon --interval=30   # 30分ごとに再実行
+    """
+    print_header()
+    print(f"\n📋 リストアップ専用デーモン起動 (サイクル間隔: {interval_minutes}分)")
+    print("  高スコア＋必須フィールド揃い → 自動登録")
+    print("  中間スコア → pending_review.json に蓄積（後で python main.py で確認）")
+    print("  Ctrl+C で安全に停止します\n")
+
+    pending_path = os.path.join(OUTPUT_DIR, "pending_review.json")
+    cycle = 0
+    total_stats = {"success": 0, "duplicate": 0, "ng": 0, "error": 0, "skip": 0, "pending": 0}
+
+    hubspot = HubSpotAgent(HUBSPOT_TOKEN, NG_LIST_FILE)
+    results_file = open(RESULTS_FILE, "a", newline="", encoding="utf-8-sig", buffering=1)
+    results_with_query_file = open(RESULTS_WITH_QUERY_FILE, "a", newline="", encoding="utf-8-sig", buffering=1)
+
+    fieldnames = [
+        "日時", "ランク", "会社名", "企業URL", "代表氏名", "電話番号",
+        "郵便番号", "都道府県", "所在地", "業種", "従業員数", "備考", "元URL"
+    ]
+    fieldnames_with_query = fieldnames + ["検索クエリ"]
+
+    results_writer = csv.DictWriter(results_file, fieldnames=fieldnames)
+    if os.path.getsize(RESULTS_FILE) == 0:
+        results_writer.writeheader()
+
+    results_with_query_writer = csv.DictWriter(
+        results_with_query_file, fieldnames=fieldnames_with_query, extrasaction="ignore"
+    )
+    if os.path.getsize(RESULTS_WITH_QUERY_FILE) == 0:
+        results_with_query_writer.writeheader()
+
+    combined_results_writer = MultiDictWriter(results_writer, results_with_query_writer)
+
+    try:
+        while True:
+            cycle += 1
+            cycle_start = time.time()
+            processed_domains: set[str] = set()
+            stats = {"success": 0, "duplicate": 0, "ng": 0, "error": 0, "skip": 0, "pending": 0}
+            cycle_pending: list[dict] = []  # このサイクルで発見した中間スコア候補
+
+            print(f"\n{'=' * 60}")
+            print(f"  📋 サイクル #{cycle}  開始: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            print(f"{'=' * 60}")
+            logger.info(f"[LIST-DAEMON] Cycle #{cycle} started")
+
+            # ─── ① 媒体リスト先行処理 ────────────────────────────────
+            for list_url in list(MEDIA_LIST_URLS):
+                print(f"\n📋 リストページ取得中: {list_url}")
+                try:
+                    list_results = scrape_company_list_page(list_url, max_companies=200)
+                    print(f"  → {len(list_results)}社を処理開始...")
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = {
+                            executor.submit(
+                                process_one_company, r, hubspot, combined_results_writer,
+                                processed_domains, cycle_pending
+                            ): r for r in list_results
+                        }
+                        for future in as_completed(futures):
+                            status = future.result()
+                            if status in stats:
+                                stats[status] += 1
+                    print_progress(stats, cycle_start)
+                except Exception as e:
+                    logger.error(f"[LIST-DAEMON] list page error {list_url}: {e}")
+
+            # ─── ② キーワード検索 ─────────────────────────────────────
+            query_list = get_sorted_queries([])
+            period_tbs = TIME_PERIOD_TBS["3カ月以内"]
+            for keyword in query_list:
+                try:
+                    print(f"\n🔍 検索中: {keyword}")
+                    search_results = search_google(keyword, period_tbs, MAX_RESULTS_PER_QUERY)
+                    record_hit(keyword, len(search_results))
+                    if not search_results:
+                        continue
+                    print(f"  → {len(search_results)}件ヒット")
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = {
+                            executor.submit(
+                                process_one_company, r, hubspot, combined_results_writer,
+                                processed_domains, cycle_pending
+                            ): r for r in search_results
+                        }
+                        for future in as_completed(futures):
+                            status = future.result()
+                            if status in stats:
+                                stats[status] += 1
+                    wait = random.uniform(2, 4)
+                    time.sleep(wait)
+                except Exception as e:
+                    logger.error(f"[LIST-DAEMON] keyword error {keyword}: {e}")
+
+            # ─── pending_review.json に追記（重複除去）────────────────
+            if cycle_pending:
+                # 既存ファイルを読み込む
+                existing: list[dict] = []
+                if os.path.exists(pending_path):
+                    try:
+                        with open(pending_path, "r", encoding="utf-8") as f:
+                            existing = json.load(f)
+                    except Exception:
+                        existing = []
+
+                # 既登録済みのURLを除外キーとして使う
+                existing_urls = {
+                    e.get("company_info", {}).get("company_url", "")
+                    for e in existing
+                }
+
+                # 新規候補のうち、まだない企業だけ追加
+                new_entries = [
+                    e for e in cycle_pending
+                    if e.get("company_info", {}).get("company_url", "") not in existing_urls
+                ]
+
+                merged = existing + new_entries
+                with open(pending_path, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+
+                stats["pending"] = len(new_entries)
+                print(f"\n  📥 {len(new_entries)}件を pending_review.json に追加（累計: {len(merged)}件）")
+                logger.info(f"[LIST-DAEMON] pending追加: {len(new_entries)}件 / 累計: {len(merged)}件")
+
+            # ─── サイクル完了レポート ─────────────────────────────────
+            elapsed = time.time() - cycle_start
+            for k in total_stats:
+                total_stats[k] += stats.get(k, 0)
+
+            print(f"""
+{'=' * 60}
+  ✅ サイクル #{cycle} 完了  ({datetime.now().strftime('%Y-%m-%d %H:%M')})
+     自動登録: {stats['success']}件  重複: {stats['duplicate']}件  NG: {stats['ng']}件
+     pending追加: {stats['pending']}件  経過: {elapsed / 60:.1f}分
+     累計自動登録: {total_stats['success']}件 / 累計pending: {total_stats['pending']}件
+{'=' * 60}""")
+            logger.info(
+                f"[LIST-DAEMON] Cycle #{cycle} done — "
+                f"success={stats['success']} pending={stats['pending']} "
+                f"dup={stats['duplicate']} ng={stats['ng']} elapsed={elapsed/60:.1f}min"
+            )
+
+            # ─── 次サイクルまで待機 ───────────────────────────────────
+            print(f"\n⏳ 次のサイクルまで {interval_minutes}分 待機... (Ctrl+C で停止)")
+            wait_until = time.time() + interval_minutes * 60
+            while time.time() < wait_until:
+                remaining = int(wait_until - time.time())
+                print(f"  残り {remaining // 60}分{remaining % 60:02d}秒...", end="\r", flush=True)
+                time.sleep(30)
+            print()
+
+    except KeyboardInterrupt:
+        print(f"\n\n⛔ リストアップデーモン停止 (Ctrl+C)")
+        print(f"  完了サイクル: {cycle}回")
+        print(f"  累計自動登録: {total_stats['success']}社  /  累計pending蓄積: {total_stats['pending']}社")
+        print(f"  → 蓄積候補を確認するには: python main.py")
+        logger.info(
+            f"[LIST-DAEMON] stopped after {cycle} cycles, "
+            f"total_success={total_stats['success']} total_pending={total_stats['pending']}"
+        )
+    finally:
+        results_file.close()
+        results_with_query_file.close()
 
 
 def update_overview_docs():
@@ -1563,6 +1748,16 @@ if __name__ == "__main__":
             print(f"  NG: {item['name']} ({item['domain']}) - {item['reason']}")
     elif "--update-docs" in sys.argv:
         update_overview_docs()
+    elif "--list-daemon" in sys.argv:
+        # リストアップ専用デーモン（中間スコアはpending蓄積・高スコアのみ自動登録）
+        interval = 60
+        for arg in sys.argv:
+            if arg.startswith("--interval="):
+                try:
+                    interval = int(arg.split("=")[1])
+                except ValueError:
+                    pass
+        run_list_daemon(interval_minutes=interval)
     elif "--daemon" in sys.argv:
         # デフォルト60分間隔、--interval=N で変更可
         interval = 60
