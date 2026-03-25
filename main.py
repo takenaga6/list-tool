@@ -1144,11 +1144,15 @@ def run_list_daemon(interval_minutes: int = 60):
                     except Exception:
                         existing = []
 
-                # 既登録済みのURLを除外キーとして使う
-                existing_urls = {
-                    e.get("company_info", {}).get("company_url", "")
-                    for e in existing
-                }
+                # 既登録済みのURLを除外キーとして使う（daemon形式とflat形式の両方に対応）
+                existing_urls = set()
+                for e in existing:
+                    if "company_info" in e:
+                        url = e.get("company_info", {}).get("company_url", "")
+                    else:
+                        url = e.get("企業URL", e.get("company_url", ""))
+                    if url:
+                        existing_urls.add(url)
 
                 # 新規候補のうち、まだない企業だけ追加
                 new_entries = [
@@ -1738,7 +1742,60 @@ def run_batch(
 
 
 if __name__ == "__main__":
-    if "--analyze" in sys.argv:
+    if "--review-pending" in sys.argv:
+        # 確認待ちリスト（pending_review.json）を端末上で表示・登録する
+        pending_path = os.path.join(OUTPUT_DIR, "pending_review.json")
+        if not os.path.exists(pending_path):
+            print("確認待ちリストがありません。")
+            sys.exit(0)
+        with open(pending_path, "r", encoding="utf-8") as _f:
+            raw = json.load(_f)
+        if not raw:
+            print("確認待ちの候補がありません。")
+            sys.exit(0)
+        # daemon形式（ネスト）とflat形式の両方に対応
+        pending_items = []
+        for item in raw:
+            if "company_info" in item:
+                pending_items.append(item)
+            else:
+                pending_items.append({
+                    "company_info": {k: item.get(k, "") for k in
+                                     ["company_name", "company_url", "representative", "phone",
+                                      "zip_code", "prefecture", "address", "industry", "employee_count", "notes"]
+                                     if k in {
+                                         "company_name": item.get("会社名", ""),
+                                         "company_url":  item.get("企業URL", ""),
+                                         "representative": item.get("代表氏名", ""),
+                                         "phone":        item.get("電話番号", ""),
+                                         "zip_code":     item.get("郵便番号", ""),
+                                         "prefecture":   item.get("都道府県", ""),
+                                         "address":      item.get("所在地", ""),
+                                         "industry":     item.get("業種", ""),
+                                         "employee_count": item.get("従業員数", ""),
+                                         "notes":        item.get("備考", ""),
+                                     }
+                                     },
+                    "rank_result":  {"rank": item.get("ランク", ""), "score": 0, "reasons": []},
+                    "search_query": "",
+                })
+        print_header()
+        hubspot = HubSpotAgent(HUBSPOT_TOKEN, NG_LIST_FILE)
+        results_file = open(RESULTS_FILE, "a", newline="", encoding="utf-8-sig", buffering=1)
+        fieldnames = ["日時", "ランク", "会社名", "企業URL", "代表氏名", "電話番号",
+                      "郵便番号", "都道府県", "所在地", "業種", "従業員数", "備考", "元URL"]
+        results_writer = csv.DictWriter(results_file, fieldnames=fieldnames)
+        if os.path.getsize(RESULTS_FILE) == 0:
+            results_writer.writeheader()
+        processed_domains: set = set()
+        registered = review_and_register(pending_items, hubspot, results_writer, processed_domains)
+        print(f"\n✅ {registered}件を登録しました。")
+        # 登録済みを pending_review.json から削除（クリア）
+        if registered > 0:
+            with open(pending_path, "w", encoding="utf-8") as _f:
+                json.dump([], _f, ensure_ascii=False)
+        results_file.close()
+    elif "--analyze" in sys.argv:
         analyze_feedback()
     elif "--audit" in sys.argv:
         from agents.hubspot_auditor import audit_hubspot

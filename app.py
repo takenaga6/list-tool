@@ -27,8 +27,8 @@ st.set_page_config(
 
 st.title("📋 Offi-Stretch リスト管理")
 
-tab_call, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
-    ["📞 架電記録", "📋 履歴", "📊 分析", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
+tab_call, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
+    ["📞 架電記録", "⏳ 確認待ち", "📋 履歴", "📊 分析", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
 )
 
 
@@ -103,6 +103,36 @@ def _read_file_to_df(filepath: str) -> pd.DataFrame | None:
     return None
 
 
+def _normalize_pending_items(items: list[dict]) -> list[dict]:
+    """daemon形式（ネスト）とbatch形式（フラット）を統一してフラットリストに変換する"""
+    result = []
+    for item in items:
+        if "company_info" in item:
+            # daemon形式: {"company_info": {...}, "rank_result": {...}, "search_query": "..."}
+            info = item["company_info"]
+            rank_result = item.get("rank_result", {})
+            flat = {
+                "日時":    info.get("scraped_at", ""),
+                "ランク":   rank_result.get("rank", ""),
+                "会社名":   info.get("company_name", ""),
+                "企業URL":  info.get("company_url", ""),
+                "代表氏名":  info.get("representative", ""),
+                "電話番号":  info.get("phone", ""),
+                "郵便番号":  info.get("zip_code", ""),
+                "都道府県":  info.get("prefecture", ""),
+                "所在地":   info.get("address", ""),
+                "業種":    info.get("industry", ""),
+                "従業員数":  info.get("employee_count", ""),
+                "備考":    info.get("notes", ""),
+                "元URL":   info.get("source_url", ""),
+            }
+            result.append(flat)
+        else:
+            # batch形式: すでにフラット
+            result.append(item)
+    return result
+
+
 def _clean_pending_df(df: pd.DataFrame) -> pd.DataFrame:
     """pending_review.json を表示用に整形する"""
     # null / 空文字ヘッダーの列を除去
@@ -143,15 +173,18 @@ def _show_pending_review_ui():
     pending_path = os.path.join(_LIST_TOOL_DIR_local, "output", "pending_review.json")
 
     if not os.path.exists(pending_path):
-        st.info("pending_review.json が見つかりません。")
+        st.info("pending_review.json が見つかりません。デーモンを起動するとここにリストが溜まります。")
         return
 
     with open(pending_path, "r", encoding="utf-8") as _f:
-        pending = _jr.load(_f)
+        pending_raw = _jr.load(_f)
 
-    if not pending:
+    if not pending_raw:
         st.info("確認待ちの候補がありません。")
         return
+
+    # daemon形式（ネスト）とbatch形式（フラット）を統一
+    pending = _normalize_pending_items(pending_raw)
 
     df_raw = pd.DataFrame(pending)
     df_clean = _clean_pending_df(df_raw)
@@ -197,14 +230,16 @@ def _show_pending_review_ui():
     col_save, col_clear = st.columns([1, 1])
     with col_save:
         if st.button("承認した企業を保存", type="primary", use_container_width=True):
-            # 承認分だけ pending_review.json に上書き保存
-            with open(pending_path, "w", encoding="utf-8") as _f:
-                _jr.dump(approved.to_dict(orient="records"), _f, ensure_ascii=False, indent=2)
-            # approved_companies.csv にも追記
+            # 承認した企業を approved_companies.csv に追記
             approved_csv = os.path.join(_LIST_TOOL_DIR_local, "output", "approved_companies.csv")
             header = not os.path.exists(approved_csv)
             approved.to_csv(approved_csv, mode="a", index=False, encoding="utf-8-sig", header=header)
-            st.success(f"{len(approved)}件を approved_companies.csv に保存しました。")
+            # 却下した企業だけ pending_review.json に残す（承認済みは削除）
+            rejected = edited[edited["承認"] == False].drop(columns=["承認"])
+            with open(pending_path, "w", encoding="utf-8") as _f:
+                _jr.dump(rejected.to_dict(orient="records"), _f, ensure_ascii=False, indent=2)
+            st.success(f"{len(approved)}件を approved_companies.csv に保存しました。残り: {len(rejected)}件")
+            st.rerun()
     with col_clear:
         if st.button("クリア（リストを消去）", use_container_width=True):
             os.remove(pending_path)
@@ -288,6 +323,15 @@ pip install gspread google-auth
         except Exception as e:
             st.error(f"接続エラー: {e}")
     return None
+
+
+# ──────────────────────────────
+# TAB: 確認待ち
+# ──────────────────────────────
+with tab_pending:
+    st.subheader("確認待ちリスト")
+    st.caption("デーモンが自動収集した中間スコア企業の一覧です。承認した企業は approved_companies.csv に保存されます。")
+    _show_pending_review_ui()
 
 
 # ──────────────────────────────
