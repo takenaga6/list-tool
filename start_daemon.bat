@@ -1,3 +1,3 @@
 @echo off
-cd /d C:\Users\user\projects\list_tool
+cd /d %~dp0
 python main.py --list-daemon --interval=60
