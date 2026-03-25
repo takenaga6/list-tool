@@ -62,7 +62,19 @@ def load_company_list() -> list[str]:
     return []
 
 
-_CALL_LIST_COLS = ["会社名", "電話番号", "代表者", "担当名", "リスト名", "HPリンク", "説明"]
+# 架電先リスト 全カラム定義
+# ── 会社情報（HubSpot/インポートで入る静的データ）──
+_CALL_LIST_STATIC_COLS = [
+    "会社名", "HPリンク", "説明リンク", "電話番号", "代表者",
+    "リストランク", "地域", "業種", "従業員数",
+    "リストアップ担当者", "条件NG", "リストアップ更新日",
+]
+# ── 架電記録（架電するたびに更新される動的データ）──
+_CALL_LIST_ACTIVITY_COLS = [
+    "アプローチ日", "架電担当者名", "パスアポ者名",
+    "アポ獲得", "アプローチ内容", "見込み", "アプローチ備考", "次回アプローチ日",
+]
+_CALL_LIST_COLS = _CALL_LIST_STATIC_COLS + _CALL_LIST_ACTIVITY_COLS
 
 
 def load_call_list() -> pd.DataFrame:
@@ -70,10 +82,37 @@ def load_call_list() -> pd.DataFrame:
     if os.path.exists(CALL_LIST_FILE):
         try:
             df = pd.read_csv(CALL_LIST_FILE, encoding="utf-8-sig", dtype=str).fillna("")
+            # 後方互換: 不足列を空文字で補完
+            for col in _CALL_LIST_COLS:
+                if col not in df.columns:
+                    df[col] = ""
             return df
         except Exception:
             pass
     return pd.DataFrame(columns=_CALL_LIST_COLS)
+
+
+def update_call_list_row(company_name: str, update_data: dict):
+    """call_list.csv の特定会社行を更新する。会社が存在しない場合は新規追加。"""
+    from datetime import date as _date
+    df = load_call_list()
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    if df.empty or company_name not in df["会社名"].values:
+        # 新規行として追加
+        new_row = {col: "" for col in _CALL_LIST_COLS}
+        new_row["会社名"] = company_name
+        new_row.update(update_data)
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        idx = df[df["会社名"] == company_name].index[0]
+        for key, val in update_data.items():
+            if key not in df.columns:
+                df[key] = ""
+            df.at[idx, key] = val
+
+    df.to_csv(CALL_LIST_FILE, index=False, encoding="utf-8-sig")
+
 
 
 def load_meetings() -> pd.DataFrame:
@@ -92,6 +131,148 @@ def load_meetings() -> pd.DataFrame:
         "記録日", "商談日", "会社名", "担当者名", "フェーズ",
         "商談結果", "契約", "次のアクション", "規模感・金額", "メモ", "担当名"
     ])
+
+
+# ──────────────────────────────
+# HubSpot 活動記録同期
+# ──────────────────────────────
+
+def _hubspot_find_company_id(name: str, token: str) -> str | None:
+    """会社名でHubSpot社IDを検索して返す。見つからなければNone。"""
+    import requests as _r
+    try:
+        resp = _r.post(
+            "https://api.hubapi.com/crm/v3/objects/companies/search",
+            json={"filterGroups": [{"filters": [{"propertyName": "name", "operator": "EQ", "value": name}]}], "limit": 1},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if resp.ok:
+            results = resp.json().get("results", [])
+            if results:
+                return results[0]["id"]
+    except Exception:
+        pass
+    return None
+
+
+def _hubspot_push_call_note(company_name: str, result: str, memo: str, tantosha: str, token: str) -> bool:
+    """
+    架電結果をHubSpotにNoteとして登録し、会社に紐付ける。
+    戻り値: 成功=True / 失敗=False
+    """
+    import requests as _r
+    from datetime import datetime as _dt
+    if not token:
+        return False
+
+    # ① 会社IDを検索
+    company_id = _hubspot_find_company_id(company_name, token)
+
+    # ② ノート本文を組み立て
+    body_lines = [
+        f"【架電記録】",
+        f"担当: {tantosha}" if tantosha else "",
+        f"結果: {result}",
+        f"備考: {memo}" if memo else "",
+    ]
+    note_body = "\n".join(l for l in body_lines if l)
+    ts_ms = int(_dt.now().timestamp() * 1000)
+
+    try:
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        resp = _r.post(
+            "https://api.hubapi.com/crm/v3/objects/notes",
+            json={"properties": {"hs_note_body": note_body, "hs_timestamp": str(ts_ms)}},
+            headers=headers,
+            timeout=10,
+        )
+        if not resp.ok:
+            return False
+        note_id = resp.json().get("id")
+
+        # ③ 会社に紐付け（会社が見つかった場合のみ）
+        if company_id and note_id:
+            _r.put(
+                f"https://api.hubapi.com/crm/v3/objects/notes/{note_id}/associations/companies/{company_id}/note_to_company",
+                headers=headers,
+                timeout=10,
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _hubspot_push_meeting_note(company_name: str, contact: str, phase: str, result: str, memo: str, tantosha: str, token: str) -> bool:
+    """商談記録をHubSpotにNoteとして登録し、会社に紐付ける。"""
+    import requests as _r
+    from datetime import datetime as _dt
+    if not token:
+        return False
+
+    company_id = _hubspot_find_company_id(company_name, token)
+    body_lines = [
+        "【商談記録】",
+        f"パスアポ者: {tantosha}" if tantosha else "",
+        f"相手担当者: {contact}" if contact else "",
+        f"フェーズ: {phase}",
+        f"結果: {result}",
+        f"備考: {memo}" if memo else "",
+    ]
+    note_body = "\n".join(l for l in body_lines if l)
+    ts_ms = int(_dt.now().timestamp() * 1000)
+
+    try:
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        resp = _r.post(
+            "https://api.hubapi.com/crm/v3/objects/notes",
+            json={"properties": {"hs_note_body": note_body, "hs_timestamp": str(ts_ms)}},
+            headers=headers,
+            timeout=10,
+        )
+        if not resp.ok:
+            return False
+        note_id = resp.json().get("id")
+        if company_id and note_id:
+            _r.put(
+                f"https://api.hubapi.com/crm/v3/objects/notes/{note_id}/associations/companies/{company_id}/note_to_company",
+                headers=headers,
+                timeout=10,
+            )
+        return True
+    except Exception:
+        return False
+
+
+# ──────────────────────────────
+# リストアップ担当者カウント管理
+# ──────────────────────────────
+
+_LISTUP_WORKERS_FILE = os.path.join(OUTPUT_DIR, "listup_workers.json")
+
+
+def _load_listup_workers() -> dict:
+    """担当者ごとのリストアップ回数を返す。"""
+    try:
+        if os.path.exists(_LISTUP_WORKERS_FILE):
+            with open(_LISTUP_WORKERS_FILE, "r", encoding="utf-8") as f:
+                return _json_mod.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _increment_listup_worker(name: str) -> int:
+    """担当者のリストアップ回数を1増やし、新しい回数を返す。"""
+    workers = _load_listup_workers()
+    workers[name] = workers.get(name, 0) + 1
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        with open(_LISTUP_WORKERS_FILE, "w", encoding="utf-8") as f:
+            _json_mod.dump(workers, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return workers[name]
 
 
 def _load_import_settings(key: str) -> dict:
@@ -426,15 +607,19 @@ with tab_call:
 
         with col2:
             st.markdown("　")
-            # 架電先リストに担当名があればデフォルトに使う
+            # 架電先リストに架電担当者名があればデフォルトに使う
             _clist_for_form = load_call_list()
-            _clist_persons = sorted(_clist_for_form["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_for_form.empty else []
+            _clist_persons = sorted(_clist_for_form["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_for_form.empty and "架電担当者名" in _clist_for_form.columns else []
             if _clist_persons:
                 tantosha = st.selectbox("担当名（架電者）", [""] + _clist_persons, key="manual_tantosha")
             else:
                 tantosha = st.text_input("担当名（架電者）", placeholder="野村 / 橘爪", key="manual_tantosha_text")
             good_points = st.text_input("反応が良かったポイント", placeholder="健康経営に興味あり 等")
             memo = st.text_area("メモ", placeholder="折り返し希望・担当者名 等", height=120)
+
+            from config import HUBSPOT_TOKEN as _HS_TOKEN
+            _sync_hs = st.checkbox("HubSpotにも記録を反映する", value=bool(_HS_TOKEN), key="manual_sync_hs", disabled=not _HS_TOKEN,
+                                   help="チェックを入れると、架電結果をHubSpotのノートとして登録します。" if _HS_TOKEN else "HubSpot連携には HUBSPOT_TOKEN の設定が必要です")
 
         got_appointment = approach_result == "アポ獲得"
         submitted = st.button("✅ 記録する", type="primary", disabled=not company_name)
@@ -452,7 +637,14 @@ with tab_call:
                 memo=memo,
                 tantosha=tantosha,
             )
-            st.success(f"記録しました: **{company_name}** — {approach_result}")
+            if _sync_hs and _HS_TOKEN:
+                _ok = _hubspot_push_call_note(company_name, approach_result, memo, tantosha, _HS_TOKEN)
+                if _ok:
+                    st.success(f"記録しました: **{company_name}** — {approach_result}　✅ HubSpotにも同期済み")
+                else:
+                    st.warning(f"記録しました: **{company_name}** — {approach_result}　⚠️ HubSpot同期に失敗しました（手動で確認してください）")
+            else:
+                st.success(f"記録しました: **{company_name}** — {approach_result}")
             st.rerun()
 
         st.divider()
@@ -1170,6 +1362,37 @@ with tab_listup:
     st.subheader("企業リストアップを実行")
     st.caption("Google検索 → スクレイピング → ランク判定 → HubSpot登録 を自動実行します。実行中はこのタブを開いたままにしてください。")
 
+    # ── 担当者設定（複数人同時実行時のキーワード分散）────────────────
+    _lu_workers = _load_listup_workers()
+    _lu_worker_names = sorted(_lu_workers.keys())
+
+    with st.expander("👤 担当者設定（複数人で同時実行する場合に設定）", expanded=bool(_lu_worker_names)):
+        _lu_col_a, _lu_col_b = st.columns([2, 1])
+        with _lu_col_a:
+            lu_worker_name = st.text_input(
+                "担当者名",
+                placeholder="例: 野村",
+                help="担当者ごとにリストアップ回数を記録し、キーワードの検索順序をずらして重複を防ぎます。",
+                key="lu_worker_name",
+            )
+        with _lu_col_b:
+            if _lu_worker_names:
+                st.markdown("**過去の実行回数**")
+                for _wn, _wc in sorted(_lu_workers.items()):
+                    st.caption(f"{_wn}: {_wc}回")
+
+        if lu_worker_name and _lu_workers:
+            _my_count = _lu_workers.get(lu_worker_name, 0)
+            _total_workers = len({n for n in _lu_workers if _lu_workers[n] > 0})
+            if _total_workers > 1:
+                st.info(
+                    f"💡 **{lu_worker_name}**さんの実行回数: {_my_count}回 → "
+                    f"キーワードを {_my_count} 番目からオフセットして検索します。"
+                    " 他の担当者とキーワードが重なりにくくなります。"
+                )
+
+    st.divider()
+
     col_l1, col_l2 = st.columns([2, 1])
 
     with col_l1:
@@ -1217,6 +1440,15 @@ with tab_listup:
         period_keys = [_PERIOD_OPTIONS[lbl] for lbl in period_labels if lbl in _PERIOD_OPTIONS]
         extra_list_urls = [u.strip() for u in list_urls_input.splitlines() if u.strip()]
 
+        # 担当者カウントを更新してキーワードオフセットを決定
+        _lu_offset = 0
+        if lu_worker_name:
+            _lu_offset = _increment_listup_worker(lu_worker_name)
+            # オフセット分キーワードを後ろにずらす（手動モードのみ即効）
+            if keywords and _lu_offset > 1:
+                _shift = (_lu_offset - 1) % max(len(keywords), 1)
+                keywords = keywords[_shift:] + keywords[:_shift]
+
         if not period_keys:
             st.warning("検索期間を1つ以上選択してください。")
             st.stop()
@@ -1233,6 +1465,8 @@ with tab_listup:
                 cmd += ["--list-urls"] + extra_list_urls
             if confirm_mode:
                 cmd.append("--confirm")
+            # キーワードオフセットを環境変数で渡す（main.pyが対応している場合に活用）
+            _lu_env_offset = str(_lu_offset)
 
             st.info(f"実行コマンド: `{' '.join(cmd)}`")
             output_placeholder = st.empty()
@@ -1242,6 +1476,8 @@ with tab_listup:
                 _env = os.environ.copy()
                 _env["PYTHONIOENCODING"] = "utf-8"
                 _env["PYTHONUTF8"] = "1"
+                _env["LISTUP_WORKER_NAME"] = lu_worker_name or ""
+                _env["LISTUP_WORKER_OFFSET"] = _lu_env_offset
                 proc = subprocess.Popen(
                     cmd,
                     cwd=_LIST_TOOL_DIR,
@@ -1296,44 +1532,45 @@ with tab_calllist:
             st.info("架電先リストがありません。「インポート」タブからリストを登録してください。")
         else:
             # フィルター
-            clf1, clf2 = st.columns(2)
+            clf1, clf2, clf3, clf4 = st.columns(4)
             with clf1:
-                cl_persons = ["全員"] + sorted(df_clist["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist())
-                cl_filt_person = st.selectbox("担当名で絞り込み", cl_persons, key="cl_filt_person")
+                cl_persons = ["全員"] + sorted(df_clist["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist())
+                cl_filt_person = st.selectbox("架電担当者名で絞り込み", cl_persons, key="cl_filt_person")
             with clf2:
+                cl_filt_mikomi = st.selectbox("見込みで絞り込み", ["全て", "A", "B", "C", "なし"], key="cl_filt_mikomi")
+            with clf3:
+                cl_filt_apo = st.selectbox("アポ獲得", ["全て", "獲得済み", "未獲得"], key="cl_filt_apo")
+            with clf4:
                 cl_filt_search = st.text_input("会社名で検索", key="cl_filt_search")
 
             filtered_cl = df_clist.copy()
             if cl_filt_person != "全員":
-                filtered_cl = filtered_cl[filtered_cl["担当名"] == cl_filt_person]
+                filtered_cl = filtered_cl[filtered_cl["架電担当者名"] == cl_filt_person]
+            if cl_filt_mikomi != "全て":
+                if cl_filt_mikomi == "なし":
+                    filtered_cl = filtered_cl[filtered_cl["見込み"].replace("", pd.NA).isna()]
+                else:
+                    filtered_cl = filtered_cl[filtered_cl["見込み"] == cl_filt_mikomi]
+            if cl_filt_apo != "全て":
+                if cl_filt_apo == "獲得済み":
+                    filtered_cl = filtered_cl[filtered_cl["アポ獲得"].str.strip().isin(["○", "〇", "済", "1", "true", "True", "アポ"])]
+                else:
+                    filtered_cl = filtered_cl[~filtered_cl["アポ獲得"].str.strip().isin(["○", "〇", "済", "1", "true", "True", "アポ"])]
             if cl_filt_search:
                 filtered_cl = filtered_cl[filtered_cl["会社名"].str.contains(cl_filt_search, na=False)]
 
-            # 最新架電結果を結合
-            if not df_fb_join.empty:
-                latest_fb = (
-                    df_fb_join.sort_values("記録日", ascending=False)
-                    .drop_duplicates(subset="会社名", keep="first")
-                    [["会社名", "アプローチ結果", "温度感", "記録日"]]
-                    .rename(columns={"アプローチ結果": "最終架電結果", "温度感": "見込みランク", "記録日": "最終架電日"})
-                )
-                display_cl = filtered_cl.merge(latest_fb, on="会社名", how="left")
-            else:
-                display_cl = filtered_cl.copy()
+            uncalled = (filtered_cl["アプローチ日"].replace("", pd.NA).isna().sum())
+            st.caption(f"表示: {len(filtered_cl)}件 / 未架電（アプローチ日なし）: {uncalled}件")
 
-            uncalled = (
-                display_cl.get("最終架電結果", pd.Series(dtype=str))
-                .isna()
-                .sum()
-                if "最終架電結果" in display_cl.columns
-                else len(display_cl)
-            )
-            st.caption(f"表示: {len(display_cl)}件 / 未架電: {uncalled}件")
+            # 表示列: 重要度順に並べる
+            show_cols = [c for c in [
+                "会社名", "電話番号", "代表者", "アプローチ日", "架電担当者名", "パスアポ者名",
+                "アポ獲得", "アプローチ内容", "見込み", "次回アプローチ日",
+                "HPリンク", "業種", "従業員数", "地域", "リストランク", "リストアップ担当者", "条件NG",
+            ] if c in filtered_cl.columns]
+            st.dataframe(filtered_cl[show_cols], use_container_width=True, hide_index=True)
 
-            show_cols = [c for c in ["会社名", "電話番号", "代表者", "担当名", "リスト名", "最終架電結果", "見込みランク", "最終架電日"] if c in display_cl.columns]
-            st.dataframe(display_cl[show_cols], use_container_width=True, hide_index=True)
-
-            csv_cl = display_cl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            csv_cl = filtered_cl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("📥 CSVダウンロード", data=csv_cl, file_name="call_list_export.csv", mime="text/csv", key="cl_dl")
 
     # ── インポート ─────────────────────────────────────────────────
@@ -1369,7 +1606,7 @@ with tab_calllist:
                         while len(_hs_companies) < hs_max:
                             _hs_params = {
                                 "limit": min(100, hs_max - len(_hs_companies)),
-                                "properties": "name,phone,website,description,state,city",
+                                "properties": "name,phone,website,state,city,industry,numberofemployees,zip",
                             }
                             if _hs_after:
                                 _hs_params["after"] = _hs_after
@@ -1397,13 +1634,18 @@ with tab_calllist:
                                 if not _name:
                                     continue
                                 _hs_rows.append({
-                                    "会社名":   _name,
-                                    "電話番号": (_p.get("phone") or "").strip(),
-                                    "代表者":   "",
-                                    "担当名":   "",
-                                    "リスト名": (_p.get("state") or _p.get("city") or "").strip(),
-                                    "HPリンク": (_p.get("website") or "").strip(),
-                                    "説明":     (_p.get("description") or "").strip(),
+                                    "会社名":           _name,
+                                    "電話番号":         (_p.get("phone") or "").strip(),
+                                    "代表者":           "",
+                                    "HPリンク":         (_p.get("website") or "").strip(),
+                                    "説明リンク":        "",
+                                    "地域":             (_p.get("state") or _p.get("city") or "").strip(),
+                                    "業種":             (_p.get("industry") or "").strip(),
+                                    "従業員数":         (_p.get("numberofemployees") or "").strip(),
+                                    "リストランク":      "",
+                                    "リストアップ担当者": "",
+                                    "条件NG":           "",
+                                    "リストアップ更新日": "",
                                 })
 
                             _hs_df = pd.DataFrame(_hs_rows)
@@ -1493,16 +1735,38 @@ with tab_calllist:
                     default = next((col for kw in keywords for col in cl_df_raw.columns if kw in col), "（使わない）")
                 return st.selectbox(label, cl_all_cols, index=cl_all_cols.index(default), key=f"clmap_{label}")
 
-            clc1, clc2 = st.columns(2)
+            st.markdown("**会社情報（静的）**")
+            clc1, clc2, clc3 = st.columns(3)
             with clc1:
-                cl_c_company  = cl_pick("会社名",   ["会社名"])
-                cl_c_phone    = cl_pick("電話番号", ["電話番号", "電話", "TEL", "tel"])
-                cl_c_daihyo   = cl_pick("代表者",   ["代表者", "代表", "社長"])
-                cl_c_tanto    = cl_pick("担当名",   ["担当名", "担当者"])
+                cl_c_company   = cl_pick("会社名",           ["会社名"])
+                cl_c_phone     = cl_pick("電話番号",         ["電話番号", "電話", "TEL", "tel"])
+                cl_c_daihyo    = cl_pick("代表者",           ["代表者", "代表", "社長"])
+                cl_c_hp        = cl_pick("HPリンク",         ["HP", "URL", "url", "ホームページ"])
             with clc2:
-                cl_c_listname = cl_pick("リスト名", ["リスト名", "リスト"])
-                cl_c_hp       = cl_pick("HPリンク", ["HP", "URL", "url", "ホームページ"])
-                cl_c_desc     = cl_pick("説明",     ["説明", "備考"])
+                cl_c_desc      = cl_pick("説明リンク",        ["説明リンク", "説明", "資料"])
+                cl_c_rank      = cl_pick("リストランク",      ["ランク", "rank"])
+                cl_c_region    = cl_pick("地域",             ["地域", "都道府県", "prefecture"])
+                cl_c_industry  = cl_pick("業種",             ["業種", "industry"])
+            with clc3:
+                cl_c_employee  = cl_pick("従業員数",         ["従業員数", "従業員", "employee"])
+                cl_c_listowner = cl_pick("リストアップ担当者", ["リストアップ担当者", "リストアップ", "担当名", "担当者"])
+                cl_c_condng    = cl_pick("条件NG",           ["条件NG", "条件", "NG"])
+                cl_c_listdate  = cl_pick("リストアップ更新日", ["リストアップ更新日", "更新日", "登録日"])
+
+            st.markdown("**架電活動記録（既存スプレッドシートから移行する場合に設定）**")
+            st.caption("スプレッドシートで架電していた場合、架電記録列もここでマッピングすると履歴ごと移行できます。")
+            clact1, clact2, clact3 = st.columns(3)
+            with clact1:
+                cl_c_apdate    = cl_pick("アプローチ日",    ["アプローチ日", "架電日", "日付"])
+                cl_c_tanto_call = cl_pick("架電担当者名",   ["架電担当者名", "架電担当", "担当名"])
+            with clact2:
+                cl_c_pasapo    = cl_pick("パスアポ者名",    ["パスアポ者名", "パスアポ", "アポ担当"])
+                cl_c_apo       = cl_pick("アポ獲得",        ["アポ獲得", "アポ"])
+                cl_c_content   = cl_pick("アプローチ内容",  ["アプローチ内容", "架電結果", "結果"])
+            with clact3:
+                cl_c_mikomi    = cl_pick("見込み",          ["見込み", "温度感"])
+                cl_c_apbiko    = cl_pick("アプローチ備考",  ["アプローチ備考", "備考", "メモ"])
+                cl_c_nextdate  = cl_pick("次回アプローチ日", ["次回アプローチ日", "次回架電日", "次回"])
 
             cl_overwrite = st.radio("インポートモード", ["追加（既存データに追加）", "上書き（全て置き換え）"], horizontal=True, key="cl_import_mode")
 
@@ -1511,7 +1775,7 @@ with tab_calllist:
                 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
                 def _cl_v(row, col):
-                    return row.get(col, "").strip() if col != "（使わない）" else ""
+                    return str(row.get(col, "")).strip() if col != "（使わない）" else ""
 
                 new_cl_rows = []
                 for _, row in cl_df_raw.iterrows():
@@ -1519,13 +1783,28 @@ with tab_calllist:
                     if not company:
                         continue
                     new_cl_rows.append({
-                        "会社名":   company,
-                        "電話番号": _cl_v(row, cl_c_phone),
-                        "代表者":   _cl_v(row, cl_c_daihyo),
-                        "担当名":   _cl_v(row, cl_c_tanto),
-                        "リスト名": _cl_v(row, cl_c_listname),
-                        "HPリンク": _cl_v(row, cl_c_hp),
-                        "説明":     _cl_v(row, cl_c_desc),
+                        # 静的列
+                        "会社名":           company,
+                        "電話番号":         _cl_v(row, cl_c_phone),
+                        "代表者":           _cl_v(row, cl_c_daihyo),
+                        "HPリンク":         _cl_v(row, cl_c_hp),
+                        "説明リンク":        _cl_v(row, cl_c_desc),
+                        "リストランク":      _cl_v(row, cl_c_rank),
+                        "地域":             _cl_v(row, cl_c_region),
+                        "業種":             _cl_v(row, cl_c_industry),
+                        "従業員数":         _cl_v(row, cl_c_employee),
+                        "リストアップ担当者": _cl_v(row, cl_c_listowner),
+                        "条件NG":           _cl_v(row, cl_c_condng),
+                        "リストアップ更新日": _cl_v(row, cl_c_listdate),
+                        # 活動列（既存スプレッドシートからの移行）
+                        "アプローチ日":     _cl_v(row, cl_c_apdate),
+                        "架電担当者名":     _cl_v(row, cl_c_tanto_call),
+                        "パスアポ者名":     _cl_v(row, cl_c_pasapo),
+                        "アポ獲得":        _cl_v(row, cl_c_apo),
+                        "アプローチ内容":   _cl_v(row, cl_c_content),
+                        "見込み":          _cl_v(row, cl_c_mikomi),
+                        "アプローチ備考":   _cl_v(row, cl_c_apbiko),
+                        "次回アプローチ日":  _cl_v(row, cl_c_nextdate),
                     })
 
                 new_cl_df = pd.DataFrame(new_cl_rows)
@@ -1546,10 +1825,17 @@ with tab_calllist:
                     "filepath": cl_filepath_val if cl_src_mode.startswith("📂") else "",
                     "mapping": {
                         "会社名": cl_c_company, "電話番号": cl_c_phone, "代表者": cl_c_daihyo,
-                        "担当名": cl_c_tanto, "リスト名": cl_c_listname, "HPリンク": cl_c_hp, "説明": cl_c_desc,
+                        "HPリンク": cl_c_hp, "説明リンク": cl_c_desc, "リストランク": cl_c_rank,
+                        "地域": cl_c_region, "業種": cl_c_industry, "従業員数": cl_c_employee,
+                        "リストアップ担当者": cl_c_listowner, "条件NG": cl_c_condng,
+                        "リストアップ更新日": cl_c_listdate,
+                        "アプローチ日": cl_c_apdate, "架電担当者名": cl_c_tanto_call,
+                        "パスアポ者名": cl_c_pasapo, "アポ獲得": cl_c_apo,
+                        "アプローチ内容": cl_c_content, "見込み": cl_c_mikomi,
+                        "アプローチ備考": cl_c_apbiko, "次回アプローチ日": cl_c_nextdate,
                     },
                 })
-                st.success(f"✅ {len(new_cl_df)}件を取り込みました。")
+                st.success(f"✅ {len(new_cl_df)}件を取り込みました。架電記録も含めて移行完了です。")
                 st.rerun()
 
     # ── インライン架電記録 ─────────────────────────────────────────
@@ -1560,12 +1846,12 @@ with tab_calllist:
         else:
             st.caption("リストから会社を選んで架電結果をすぐに記録できます。別のシートに切り替える必要はありません。")
 
-            # フィルター（担当名で絞り込んでから会社を選択）
-            cl_inline_persons = ["全員"] + sorted(df_clist_inline["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist())
-            il_person_filter = st.selectbox("担当名で絞り込む", cl_inline_persons, key="il_person_filter")
+            # フィルター（架電担当者名で絞り込んでから会社を選択）
+            cl_inline_persons = ["全員"] + sorted(df_clist_inline["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist())
+            il_person_filter = st.selectbox("架電担当者名で絞り込む", cl_inline_persons, key="il_person_filter")
 
             if il_person_filter != "全員":
-                il_companies = df_clist_inline[df_clist_inline["担当名"] == il_person_filter]["会社名"].tolist()
+                il_companies = df_clist_inline[df_clist_inline["架電担当者名"] == il_person_filter]["会社名"].tolist()
             else:
                 il_companies = df_clist_inline["会社名"].tolist()
 
@@ -1573,45 +1859,127 @@ with tab_calllist:
 
             if il_selected:
                 il_row = df_clist_inline[df_clist_inline["会社名"] == il_selected].iloc[0]
-                # 会社情報パネル
-                st.info(
-                    f"📞 **電話番号**: {il_row.get('電話番号', '') or '―'}　　"
-                    f"👤 **代表者**: {il_row.get('代表者', '') or '―'}　　"
-                    f"🏢 **担当**: {il_row.get('担当名', '') or '―'}"
-                )
-                if il_row.get("HPリンク"):
-                    st.markdown(f"🌐 HP: [{il_row['HPリンク']}]({il_row['HPリンク']})")
 
-                il_col1, il_col2 = st.columns([2, 1])
+                # 会社情報パネル
+                _il_phone   = il_row.get("電話番号", "") or "―"
+                _il_daihyo  = il_row.get("代表者", "") or "―"
+                _il_rank    = il_row.get("リストランク", "") or "―"
+                _il_region  = il_row.get("地域", "") or ""
+                _il_ind     = il_row.get("業種", "") or ""
+                _il_emp     = il_row.get("従業員数", "") or ""
+                st.info(
+                    f"📞 **{_il_phone}**　　👤 代表: {_il_daihyo}　　"
+                    f"ランク: {_il_rank}"
+                    + (f"　　地域: {_il_region}" if _il_region else "")
+                    + (f"　　業種: {_il_ind}" if _il_ind else "")
+                    + (f"　　従業員: {_il_emp}" if _il_emp else "")
+                )
+                _il_hp = il_row.get("HPリンク", "")
+                _il_desc = il_row.get("説明リンク", "")
+                _il_links = []
+                if _il_hp:
+                    _il_links.append(f"[🌐 HP]({_il_hp})")
+                if _il_desc:
+                    _il_links.append(f"[📄 説明リンク]({_il_desc})")
+                if _il_links:
+                    st.markdown("　".join(_il_links))
+
+                st.markdown("---")
+                st.markdown("#### 架電記録を入力")
+
+                il_col1, il_col2 = st.columns(2)
                 with il_col1:
+                    from datetime import date as _il_date
+                    il_approach_date = st.date_input(
+                        "アプローチ日",
+                        value=_il_date.today(),
+                        key="il_approach_date",
+                    )
+                    il_tantosha = st.text_input(
+                        "架電担当者名",
+                        value=il_row.get("架電担当者名", ""),
+                        placeholder="例: 野村",
+                        key="il_tantosha",
+                    )
+                    il_pasapo = st.text_input(
+                        "パスアポ者名（アポ相手）",
+                        value=il_row.get("パスアポ者名", ""),
+                        placeholder="例: 橘爪",
+                        key="il_pasapo",
+                    )
+                    il_apo = st.selectbox(
+                        "アポ獲得",
+                        ["", "○", "×"],
+                        index=0,
+                        key="il_apo",
+                    )
+                with il_col2:
                     il_result = st.selectbox(
-                        "架電結果",
+                        "アプローチ内容（架電結果）",
                         ["社長NG", "受付NG", "取材NG", "担当NG", "社長アポ", "担当アポ", "資料送付", "追客", "不通リスト", "追わない", "日程調整中", "触るな危険"],
                         key="il_result",
                     )
-                    il_rank = st.selectbox("見込みランク", ["なし", "C", "B", "A"], key="il_rank")
-                    # 担当名: リストの担当名をデフォルトに
-                    il_tantosha = st.text_input(
-                        "担当名（架電者）",
-                        value=il_row.get("担当名", ""),
-                        placeholder="野村 / 橘爪",
-                        key="il_tantosha",
+                    il_mikomi = st.selectbox(
+                        "見込み",
+                        ["", "A", "B", "C"],
+                        key="il_mikomi",
                     )
-                with il_col2:
-                    il_good = st.text_input("反応が良かったポイント", key="il_good")
-                    il_memo = st.text_area("メモ", height=120, key="il_memo")
+                    il_memo = st.text_area(
+                        "アプローチ備考",
+                        value=il_row.get("アプローチ備考", ""),
+                        height=90,
+                        key="il_memo",
+                    )
+                    il_next_date = st.date_input(
+                        "次回アプローチ日（任意）",
+                        value=None,
+                        key="il_next_date",
+                    )
+
+                from config import HUBSPOT_TOKEN as _IL_HS_TOKEN
+                _il_sync_hs = st.checkbox(
+                    "HubSpotにも記録を反映する",
+                    value=bool(_IL_HS_TOKEN),
+                    key="il_sync_hs",
+                    disabled=not _IL_HS_TOKEN,
+                    help="架電結果をHubSpotのノートとして登録します。" if _IL_HS_TOKEN else "HubSpot連携には HUBSPOT_TOKEN の設定が必要です",
+                )
 
                 if st.button("✅ 架電を記録する", type="primary", key="il_submit"):
+                    _il_apo_str = str(il_approach_date)
+                    _il_next_str = str(il_next_date) if il_next_date else ""
+
+                    # call_list.csv を更新（最新状態を上書き）
+                    update_call_list_row(il_selected, {
+                        "アプローチ日":    _il_apo_str,
+                        "架電担当者名":    il_tantosha,
+                        "パスアポ者名":    il_pasapo,
+                        "アポ獲得":       il_apo,
+                        "アプローチ内容":  il_result,
+                        "見込み":         il_mikomi,
+                        "アプローチ備考":  il_memo,
+                        "次回アプローチ日": _il_next_str,
+                    })
+
+                    # feedback.csv にも追記（PDCA履歴）
                     record_feedback(
                         company_name=il_selected,
                         approach_result=il_result,
-                        got_appointment=il_result in ("社長アポ", "担当アポ"),
-                        temperature=il_rank,
-                        good_points=il_good,
+                        got_appointment=il_apo in ("○", "〇"),
+                        temperature=il_mikomi,
                         memo=il_memo,
                         tantosha=il_tantosha,
                     )
-                    st.success(f"記録しました: **{il_selected}** — {il_result}")
+
+                    # HubSpot同期（オプション）
+                    if _il_sync_hs and _IL_HS_TOKEN:
+                        _ok = _hubspot_push_call_note(il_selected, il_result, il_memo, il_tantosha, _IL_HS_TOKEN)
+                        if _ok:
+                            st.success(f"記録しました: **{il_selected}** — {il_result}　✅ HubSpotにも同期済み")
+                        else:
+                            st.warning(f"記録しました: **{il_selected}** — {il_result}　⚠️ HubSpot同期に失敗しました")
+                    else:
+                        st.success(f"記録しました: **{il_selected}** — {il_result}")
                     st.rerun()
 
 
@@ -1702,13 +2070,23 @@ with tab_meeting:
                 st.success("🎉 契約！")
             # パスアポ対応者（架電担当）をデフォルト候補として表示
             _clist_m = load_call_list()
-            _m_persons = sorted(_clist_m["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_m.empty else []
+            _m_persons_col = "架電担当者名" if "架電担当者名" in _clist_m.columns else "担当名"
+            _m_persons = sorted(_clist_m[_m_persons_col].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_m.empty else []
             if _m_persons:
                 m_tantosha = st.selectbox("担当名（パスアポ対応者）", [""] + _m_persons, key="m_tantosha_sel")
             else:
                 m_tantosha = st.text_input("担当名（パスアポ対応者）", placeholder="野村 / 橘爪", key="m_tantosha_text")
             m_deal_size = st.text_input("規模感・金額", placeholder="月額 5万円 / 50名")
             m_next_action = st.text_input("次のアクション", placeholder="来週再提案 / 稟議待ち")
+
+            from config import HUBSPOT_TOKEN as _MT_HS_TOKEN
+            _mt_sync_hs = st.checkbox(
+                "HubSpotにも記録を反映する",
+                value=bool(_MT_HS_TOKEN),
+                key="mt_sync_hs",
+                disabled=not _MT_HS_TOKEN,
+                help="商談記録をHubSpotのノートとして登録します。" if _MT_HS_TOKEN else "HubSpot連携には HUBSPOT_TOKEN の設定が必要です",
+            )
 
         m_memo = st.text_area("メモ", placeholder="ヒアリング内容・懸念点・提案内容など", height=100)
 
@@ -1746,7 +2124,14 @@ with tab_meeting:
                 tantosha=m_tantosha,
                 extra_fields=m_custom_values if m_custom_values else None,
             )
-            st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}")
+            if _mt_sync_hs and _MT_HS_TOKEN:
+                _ok = _hubspot_push_meeting_note(m_company, m_contact, m_phase, m_result, m_memo, m_tantosha, _MT_HS_TOKEN)
+                if _ok:
+                    st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}　✅ HubSpotにも同期済み")
+                else:
+                    st.warning(f"記録しました: **{m_company}** — {m_phase} / {m_result}　⚠️ HubSpot同期に失敗しました")
+            else:
+                st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}")
             st.rerun()
 
         # 直近5件
