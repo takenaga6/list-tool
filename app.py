@@ -1838,7 +1838,7 @@ def _save_meeting_row(row_data: dict):
 with tab_meeting:
     st.subheader("商談一覧")
 
-    mtab_input, mtab_list, mtab_pipeline = st.tabs(["✏️ 新規入力", "📋 一覧・検索", "📊 集計"])
+    mtab_input, mtab_list, mtab_pipeline, mtab_import = st.tabs(["✏️ 新規入力", "📋 一覧・検索", "📊 集計", "📥 インポート"])
 
     # ── 新規入力 ────────────────────────────────────────────────
     with mtab_input:
@@ -2048,3 +2048,178 @@ with tab_meeting:
                 )
             else:
                 st.caption("対象なし")
+
+    # ── インポート ──────────────────────────────────────────────
+    with mtab_import:
+        st.caption("CSV / Excel / Googleスプレッドシートから商談記録を一括取り込みできます。")
+
+        mi_saved = _load_import_settings("meeting_import")
+
+        mi_src_mode = st.radio(
+            "ファイルの指定方法",
+            ["📂 パスを直接入力", "⬆️ アップロード", "🔗 Googleスプレッドシート"],
+            horizontal=True,
+            key="mi_src_mode",
+        )
+
+        mi_df_raw: pd.DataFrame | None = None
+        mi_filepath_val = ""
+
+        if mi_src_mode.startswith("📂"):
+            mi_filepath_val = st.text_input(
+                "ファイルパス（CSV または .xlsx）",
+                value=mi_saved.get("filepath", ""),
+                placeholder=r"C:\Users\user\Desktop\商談管理.xlsx",
+                key="mi_filepath",
+            )
+            if mi_filepath_val and os.path.exists(mi_filepath_val):
+                mi_df_raw = _read_file_to_df(mi_filepath_val)
+                if mi_df_raw is None:
+                    st.error("ファイルを読み込めませんでした。")
+            elif mi_filepath_val:
+                st.warning("ファイルが見つかりません。パスを確認してください。")
+        elif mi_src_mode.startswith("⬆️"):
+            mi_uploaded = st.file_uploader("CSV / Excel を選択", type=["csv", "xlsx", "xls"], key="mi_upload")
+            if mi_uploaded:
+                ext = os.path.splitext(mi_uploaded.name)[1].lower()
+                if ext in (".xlsx", ".xls"):
+                    mi_df_raw = pd.read_excel(mi_uploaded, dtype=str).fillna("")
+                else:
+                    raw_mi = mi_uploaded.read()
+                    for enc in ("utf-8-sig", "shift-jis", "cp932", "utf-8"):
+                        try:
+                            mi_df_raw = pd.read_csv(_io_mod.StringIO(raw_mi.decode(enc)), dtype=str).fillna("")
+                            break
+                        except Exception:
+                            pass
+                mi_filepath_val = mi_uploaded.name
+        else:
+            mi_df_raw = _render_gsheets_loader("meeting_import_gs", mi_saved)
+
+        if mi_df_raw is not None:
+            st.markdown(f"**読み込み: {len(mi_df_raw)}行 / {len(mi_df_raw.columns)}列**")
+            st.dataframe(mi_df_raw.head(3), use_container_width=True, hide_index=True)
+
+            st.markdown("### 列マッピング")
+            mi_all_cols = ["（使わない）"] + mi_df_raw.columns.tolist()
+            mi_map_saved = mi_saved.get("mapping", {})
+
+            def mi_pick(label, keywords):
+                saved_val = mi_map_saved.get(label)
+                if saved_val and saved_val in mi_all_cols:
+                    default = saved_val
+                else:
+                    default = next((col for kw in keywords for col in mi_df_raw.columns if kw in col), "（使わない）")
+                return st.selectbox(label, mi_all_cols, index=mi_all_cols.index(default), key=f"mimap_{label}")
+
+            mic1, mic2, mic3 = st.columns(3)
+            with mic1:
+                mi_c_company   = mi_pick("企業名",         ["企業名", "会社名"])
+                mi_c_month     = mi_pick("アポ獲得月",      ["アポ獲得月", "獲得月"])
+                mi_c_getter    = mi_pick("アポ獲得者",      ["アポ獲得者", "獲得者"])
+                mi_c_listup    = mi_pick("リストアップ",    ["リストアップ"])
+                mi_c_summary   = mi_pick("アポ獲得概要",    ["アポ獲得概要", "概要"])
+                mi_c_tanto     = mi_pick("アポ担当",        ["アポ担当", "担当"])
+                mi_c_precheck  = mi_pick("前確認実施済",    ["前確認", "確認"])
+                mi_c_apodate   = mi_pick("アポ獲得日",      ["アポ獲得日", "獲得日"])
+            with mic2:
+                mi_c_plandate  = mi_pick("アポ実施予定日",  ["アポ実施予定日", "実施予定日", "予定日"])
+                mi_c_jisshi    = mi_pick("実施の有無",      ["実施の有無", "実施"])
+                mi_c_result    = mi_pick("商談結果",        ["商談結果", "結果"])
+                mi_c_sekinin   = mi_pick("責任者の有無",    ["責任者の有無", "責任者"])
+                mi_c_exec      = mi_pick("アポ実施担当者",  ["アポ実施担当者", "実施担当者"])
+                mi_c_shissou   = mi_pick("失注理由",        ["失注理由"])
+                mi_c_shissoud  = mi_pick("失注理由（詳細）", ["失注理由（詳細）", "失注詳細"])
+            with mic3:
+                mi_c_industry  = mi_pick("業種",            ["業種"])
+                mi_c_url       = mi_pick("企業URL",         ["企業URL", "URL", "HP"])
+                mi_c_re_tanto  = mi_pick("再アプローチ担当", ["再アプローチ担当"])
+                mi_c_ap_tanto  = mi_pick("アプローチ担当名", ["アプローチ担当名", "担当名"])
+                mi_c_yakusyoku = mi_pick("役職",            ["役職"])
+                mi_c_tel       = mi_pick("電話番号",        ["電話番号", "電話", "TEL"])
+                mi_c_status    = mi_pick("ステータス",      ["ステータス"])
+                mi_c_mikomi    = mi_pick("見込み",          ["見込み"])
+                mi_c_content   = mi_pick("アプローチ内容",  ["アプローチ内容", "内容"])
+                mi_c_nextdate  = mi_pick("次回アプローチ日", ["次回アプローチ日", "次回"])
+
+            mi_overwrite = st.radio(
+                "インポートモード",
+                ["追加（既存データに追加）", "上書き（全て置き換え）"],
+                horizontal=True,
+                key="mi_import_mode",
+            )
+
+            if st.button("✅ 商談一覧に取り込む", type="primary", key="mi_import_btn"):
+                from datetime import date as _mi_date
+
+                def _mi_v(row, col):
+                    return str(row.get(col, "")).strip() if col != "（使わない）" else ""
+
+                new_mi_rows = []
+                for _, row in mi_df_raw.iterrows():
+                    company = _mi_v(row, mi_c_company)
+                    if not company:
+                        continue
+                    new_mi_rows.append({
+                        "記録日":         str(_mi_date.today()),
+                        "アポ獲得月":      _mi_v(row, mi_c_month),
+                        "アポ獲得者":      _mi_v(row, mi_c_getter),
+                        "リストアップ":    _mi_v(row, mi_c_listup),
+                        "企業名":          company,
+                        "アポ獲得概要":    _mi_v(row, mi_c_summary),
+                        "アポ担当":        _mi_v(row, mi_c_tanto),
+                        "前確認実施済":    _mi_v(row, mi_c_precheck),
+                        "アポ獲得日":      _mi_v(row, mi_c_apodate),
+                        "アポ実施予定日":   _mi_v(row, mi_c_plandate),
+                        "実施の有無":      _mi_v(row, mi_c_jisshi),
+                        "商談結果":        _mi_v(row, mi_c_result),
+                        "責任者の有無":    _mi_v(row, mi_c_sekinin),
+                        "アポ実施担当者":   _mi_v(row, mi_c_exec),
+                        "失注理由":        _mi_v(row, mi_c_shissou),
+                        "失注理由（詳細）": _mi_v(row, mi_c_shissoud),
+                        "業種":            _mi_v(row, mi_c_industry),
+                        "企業URL":         _mi_v(row, mi_c_url),
+                        "再アプローチ担当": _mi_v(row, mi_c_re_tanto),
+                        "アプローチ担当名": _mi_v(row, mi_c_ap_tanto),
+                        "役職":            _mi_v(row, mi_c_yakusyoku),
+                        "電話番号":        _mi_v(row, mi_c_tel),
+                        "ステータス":      _mi_v(row, mi_c_status),
+                        "見込み":          _mi_v(row, mi_c_mikomi),
+                        "アプローチ内容":   _mi_v(row, mi_c_content),
+                        "次回アプローチ日": _mi_v(row, mi_c_nextdate),
+                    })
+
+                new_mi_df = pd.DataFrame(new_mi_rows)
+
+                os.makedirs(OUTPUT_DIR, exist_ok=True)
+                if mi_overwrite.startswith("追加"):
+                    existing_mi = load_meetings()
+                    if not existing_mi.empty and "企業名" in existing_mi.columns:
+                        existing_companies = set(existing_mi["企業名"].dropna().tolist())
+                        new_mi_df = new_mi_df[~new_mi_df["企業名"].isin(existing_companies)]
+                    mode = "a"
+                    header = not os.path.exists(MEETINGS_FILE) or os.path.getsize(MEETINGS_FILE) == 0
+                else:
+                    mode = "w"
+                    header = True
+
+                new_mi_df.to_csv(MEETINGS_FILE, mode=mode, index=False, encoding="utf-8-sig", header=header)
+                _save_import_settings("meeting_import", {
+                    "filepath": mi_filepath_val if mi_src_mode.startswith("📂") else "",
+                    "mapping": {
+                        "企業名": mi_c_company, "アポ獲得月": mi_c_month, "アポ獲得者": mi_c_getter,
+                        "リストアップ": mi_c_listup, "アポ獲得概要": mi_c_summary, "アポ担当": mi_c_tanto,
+                        "前確認実施済": mi_c_precheck, "アポ獲得日": mi_c_apodate,
+                        "アポ実施予定日": mi_c_plandate, "実施の有無": mi_c_jisshi,
+                        "商談結果": mi_c_result, "責任者の有無": mi_c_sekinin,
+                        "アポ実施担当者": mi_c_exec, "失注理由": mi_c_shissou,
+                        "失注理由（詳細）": mi_c_shissoud, "業種": mi_c_industry,
+                        "企業URL": mi_c_url, "再アプローチ担当": mi_c_re_tanto,
+                        "アプローチ担当名": mi_c_ap_tanto, "役職": mi_c_yakusyoku,
+                        "電話番号": mi_c_tel, "ステータス": mi_c_status,
+                        "見込み": mi_c_mikomi, "アプローチ内容": mi_c_content,
+                        "次回アプローチ日": mi_c_nextdate,
+                    },
+                })
+                st.success(f"✅ {len(new_mi_df)}件を取り込みました。")
+                st.rerun()
