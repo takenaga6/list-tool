@@ -1800,7 +1800,7 @@ with tab_calllist:
 # ──────────────────────────────
 
 def _save_meeting_row(row_data: dict):
-    """商談一覧CSVに1行追記する"""
+    """商談一覧CSVに1行追記する。受注/失注はキーワード学習にも反映する。"""
     import csv as _csv_m
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     file_exists = os.path.exists(MEETINGS_FILE) and os.path.getsize(MEETINGS_FILE) > 0
@@ -1809,6 +1809,30 @@ def _save_meeting_row(row_data: dict):
         if not file_exists:
             writer.writeheader()
         writer.writerow(row_data)
+
+    # 商談結果をキーワード学習に反映
+    try:
+        from config import _find_query_for_company, _find_domain_for_company, load_exclude_list_csv, add_to_exclude_csv
+        from agents.keyword_agent import record_ng, record_rank_result
+
+        company = row_data.get("企業名", "")
+        result  = row_data.get("商談結果", "")
+        mikomi  = row_data.get("見込み", "")
+        query   = _find_query_for_company(company)
+
+        if query:
+            if "受注" in result or "契約" in result:
+                record_rank_result(query, "A")   # 受注 → Aランク学習
+            elif "失注" in result or "NG" in result:
+                record_ng(query)                  # 失注 → NGクエリ学習
+
+        # 失注した場合はドメインを除外リストに追加
+        if "失注" in result or "NG" in result:
+            domain = _find_domain_for_company(company)
+            if domain and domain not in load_exclude_list_csv():
+                add_to_exclude_csv(domain, f"商談失注: {result}")
+    except Exception:
+        pass
 
 
 with tab_meeting:
