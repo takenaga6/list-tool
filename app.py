@@ -1,4 +1,4 @@
-"""
+﻿"""
 Offi-Stretch テレアポ管理アプリ
 起動: streamlit run app.py
 """
@@ -27,8 +27,8 @@ st.set_page_config(
 
 st.title("📋 Offi-Stretch リスト管理")
 
-tab_calllist, tab_call, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
-    ["📋 架電先リスト", "📞 架電記録", "⏳ 確認待ち", "📋 履歴", "📊 ダッシュボード", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
+tab_calllist, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
+    ["📋 架電先リスト", "⏳ リストアップ確認待ち", "📋 履歴", "📊 ダッシュボード", "📥 取り込み", "🔍 リストアップ", "🤝 商談一覧"]
 )
 
 
@@ -115,22 +115,29 @@ def update_call_list_row(company_name: str, update_data: dict):
 
 
 
+# 商談一覧 全カラム定義
+_MEETING_COLS = [
+    "記録日", "アポ獲得月", "アポ獲得者", "リストアップ", "企業名",
+    "アポ獲得概要", "アポ担当", "前確認実施済", "アポ獲得日", "アポ実施予定日",
+    "実施の有無", "商談結果", "責任者の有無", "アポ実施担当者",
+    "失注理由", "失注理由（詳細）", "業種", "企業URL",
+    "再アプローチ担当", "アプローチ担当名", "役職", "電話番号",
+    "ステータス", "見込み", "アプローチ内容", "次回アプローチ日",
+]
+
+
 def load_meetings() -> pd.DataFrame:
-    """商談記録をCSVから読み込む（後方互換: 担当名列がない場合は空列追加）"""
+    """商談記録をCSVから読み込む（後方互換: 不足列がない場合は空列追加）"""
     if os.path.exists(MEETINGS_FILE):
         try:
             df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig")
-            df["商談日"] = pd.to_datetime(df["商談日"], errors="coerce")
-            df["記録日"] = pd.to_datetime(df["記録日"], errors="coerce")
-            if "担当名" not in df.columns:
-                df["担当名"] = ""
+            for col in _MEETING_COLS:
+                if col not in df.columns:
+                    df[col] = ""
             return df
         except Exception:
             pass
-    return pd.DataFrame(columns=[
-        "記録日", "商談日", "会社名", "担当者名", "フェーズ",
-        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ", "担当名"
-    ])
+    return pd.DataFrame(columns=_MEETING_COLS)
 
 
 # ──────────────────────────────
@@ -236,6 +243,65 @@ def _hubspot_push_meeting_note(company_name: str, contact: str, phase: str, resu
         if company_id and note_id:
             _r.put(
                 f"https://api.hubapi.com/crm/v3/objects/notes/{note_id}/associations/companies/{company_id}/note_to_company",
+                headers=headers,
+                timeout=10,
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _hubspot_push_deal(deal_data: dict, token: str) -> bool:
+    """
+    商談一覧データをHubSpotの取引（Deal）として登録し、会社と紐付ける。
+    """
+    import requests as _r
+    from datetime import datetime as _dt
+    if not token:
+        return False
+
+    company_name = deal_data.get("企業名", "")
+    company_id = _hubspot_find_company_id(company_name, token) if company_name else None
+
+    # HubSpotのDealステージをマッピング
+    result = deal_data.get("商談結果", "")
+    jisshi = deal_data.get("実施の有無", "")
+    if "受注" in result or "契約" in result:
+        stage = "closedwon"
+    elif "失注" in result or "NG" in result:
+        stage = "closedlost"
+    elif jisshi and jisshi not in ("", "未実施"):
+        stage = "qualifiedtobuy"
+    else:
+        stage = "appointmentscheduled"
+
+    deal_name = f"{company_name} - {deal_data.get('アポ獲得概要', '')}" if deal_data.get('アポ獲得概要') else company_name
+    props = {
+        "dealname":  deal_name,
+        "dealstage": stage,
+        "pipeline":  "default",
+    }
+    if deal_data.get("アポ実施予定日"):
+        props["closedate"] = deal_data["アポ実施予定日"]
+    if deal_data.get("アポ獲得月"):
+        props["description"] = f"アポ獲得月: {deal_data['アポ獲得月']}"
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        resp = _r.post(
+            "https://api.hubapi.com/crm/v3/objects/deals",
+            json={"properties": props},
+            headers=headers,
+            timeout=10,
+        )
+        if not resp.ok:
+            return False
+        deal_id = resp.json().get("id")
+
+        # 会社に紐付け
+        if company_id and deal_id:
+            _r.put(
+                f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}/associations/companies/{company_id}/deal_to_company",
                 headers=headers,
                 timeout=10,
             )
@@ -549,259 +615,6 @@ with tab_pending:
     st.caption("デーモンが自動収集した中間スコア企業の一覧です。承認した企業は approved_companies.csv に保存されます。")
     _show_pending_review_ui()
 
-
-# ──────────────────────────────
-# TAB1: コール記録
-# ──────────────────────────────
-with tab_call:
-    st.subheader("架電結果を記録する")
-    ctab_manual, ctab_csv = st.tabs(["✏️ 手動入力", "📥 CSVインポート"])
-
-    with ctab_manual:
-        companies = load_company_list()
-
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            if companies:
-                input_mode = st.radio("会社名の入力方法", ["リストから選択", "直接入力"], horizontal=True, label_visibility="collapsed")
-            else:
-                input_mode = "直接入力"
-
-            if input_mode == "リストから選択" and companies:
-                company_name = st.selectbox("会社名", companies)
-            else:
-                company_name = st.text_input("会社名", placeholder="株式会社〇〇")
-
-            approach_result = st.selectbox(
-                "架電結果",
-                ["社長NG", "受付NG", "取材NG", "担当NG", "社長アポ", "担当アポ", "資料送付", "追客", "不通リスト", "追わない", "日程調整中", "触るな危険"],
-            )
-
-            rejection_reason = ""
-            if approach_result == "断り":
-                rejection_reason = st.selectbox(
-                    "断り理由",
-                    ["既導入", "興味なし", "予算なし", "タイミング", "担当不在", "その他"],
-                )
-
-            prospect_rank = st.selectbox(
-                "見込みランク",
-                options=["なし", "C", "B", "A"],
-                index=0,
-                help="A=有望　B=可能性あり　C=低見込み",
-            )
-
-            company_scale = st.selectbox(
-                "企業規模（目安）",
-                ["不明", "小", "中", "大"],
-                index=0,
-                help="ざっくりで構いません。小規模は従業員数10〜50程度など。",
-            )
-
-            ng_reason = st.selectbox(
-                "NG理由（該当があれば）",
-                ["なし", "規模NG", "業種NG", "メディアNG", "その他"],
-                index=0,
-            )
-
-        with col2:
-            st.markdown("　")
-            # 架電先リストに架電担当者名があればデフォルトに使う
-            _clist_for_form = load_call_list()
-            _clist_persons = sorted(_clist_for_form["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_for_form.empty and "架電担当者名" in _clist_for_form.columns else []
-            if _clist_persons:
-                tantosha = st.selectbox("担当名（架電者）", [""] + _clist_persons, key="manual_tantosha")
-            else:
-                tantosha = st.text_input("担当名（架電者）", placeholder="野村 / 橘爪", key="manual_tantosha_text")
-            good_points = st.text_input("反応が良かったポイント", placeholder="健康経営に興味あり 等")
-            memo = st.text_area("メモ", placeholder="折り返し希望・担当者名 等", height=120)
-
-            from config import HUBSPOT_TOKEN as _HS_TOKEN
-            _sync_hs = st.checkbox("HubSpotにも記録を反映する", value=bool(_HS_TOKEN), key="manual_sync_hs", disabled=not _HS_TOKEN,
-                                   help="チェックを入れると、架電結果をHubSpotのノートとして登録します。" if _HS_TOKEN else "HubSpot連携には HUBSPOT_TOKEN の設定が必要です")
-
-        got_appointment = approach_result == "アポ獲得"
-        submitted = st.button("✅ 記録する", type="primary", disabled=not company_name)
-
-        if submitted and company_name:
-            record_feedback(
-                company_name=company_name,
-                approach_result=approach_result,
-                got_appointment=got_appointment,
-                rejection_reason=rejection_reason,
-                temperature=prospect_rank,
-                company_scale=company_scale,
-                ng_reason=ng_reason,
-                good_points=good_points,
-                memo=memo,
-                tantosha=tantosha,
-            )
-            if _sync_hs and _HS_TOKEN:
-                _ok = _hubspot_push_call_note(company_name, approach_result, memo, tantosha, _HS_TOKEN)
-                if _ok:
-                    st.success(f"記録しました: **{company_name}** — {approach_result}　✅ HubSpotにも同期済み")
-                else:
-                    st.warning(f"記録しました: **{company_name}** — {approach_result}　⚠️ HubSpot同期に失敗しました（手動で確認してください）")
-            else:
-                st.success(f"記録しました: **{company_name}** — {approach_result}")
-            st.rerun()
-
-        st.divider()
-        st.caption("直近の記録")
-        df_fb = load_feedback()
-        if not df_fb.empty:
-            recent = df_fb.sort_values("記録日", ascending=False).head(10)
-            display_cols = [
-                c for c in ["記録日", "担当名", "会社名", "アプローチ結果", "規模", "NG理由", "断り理由", "温度感", "メモ"]
-                if c in recent.columns
-            ]
-            st.dataframe(
-                recent[display_cols].rename(columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.caption("まだ記録がありません")
-
-    # ── コール記録 インポート（ファイルパス記憶・Excel対応）────────
-    with ctab_csv:
-        c_saved = _load_import_settings("call")
-        st.caption("CSV / Excel (.xlsx) / Googleスプレッドシート を読み込んでコール記録に取り込みます。")
-
-        # ── ファイル指定（パス直接入力 or アップロード or Google Sheets）─────────
-        c_src_mode = st.radio(
-            "ファイルの指定方法",
-            ["📂 パスを直接入力（毎回開く不要）", "⬆️ アップロード", "🔗 Googleスプレッドシート"],
-            horizontal=True,
-            key="c_src_mode",
-        )
-
-        c_df_raw: pd.DataFrame | None = None
-        c_filepath = ""
-
-        if c_src_mode.startswith("📂"):
-            c_default_path = c_saved.get("filepath", "")
-            c_filepath = st.text_input(
-                "ファイルパス（CSV または .xlsx）",
-                value=c_default_path,
-                placeholder=r"C:\Users\user\Desktop\テレアポ記録.xlsx",
-                key="c_filepath",
-            )
-            if c_filepath and os.path.exists(c_filepath):
-                c_df_raw = _read_file_to_df(c_filepath)
-                if c_df_raw is None:
-                    st.error("ファイルを読み込めませんでした。")
-            elif c_filepath:
-                st.warning("ファイルが見つかりません。パスを確認してください。")
-        elif c_src_mode.startswith("⬆️"):
-            c_uploaded = st.file_uploader("CSV / Excel を選択", type=["csv", "xlsx", "xls"], key="call_file_upload")
-            if c_uploaded:
-                ext = os.path.splitext(c_uploaded.name)[1].lower()
-                if ext in (".xlsx", ".xls"):
-                    c_df_raw = pd.read_excel(c_uploaded, dtype=str).fillna("")
-                else:
-                    raw = c_uploaded.read()
-                    for enc in ("utf-8-sig", "shift-jis", "cp932", "utf-8"):
-                        try:
-                            c_df_raw = pd.read_csv(_io_mod.StringIO(raw.decode(enc)), dtype=str).fillna("")
-                            break
-                        except Exception:
-                            pass
-                c_filepath = c_uploaded.name
-        else:
-            # ── Google Sheets 連携 ──────────────────────────────────
-            c_df_raw = _render_gsheets_loader("call_gs", c_saved)
-
-        if c_df_raw is not None:
-            st.markdown(f"**読み込み: {len(c_df_raw)}行 / {len(c_df_raw.columns)}列**")
-            st.dataframe(c_df_raw.head(3), use_container_width=True, hide_index=True)
-
-            st.markdown("### 列マッピング")
-            c_cols = ["（使わない）"] + c_df_raw.columns.tolist()
-            c_map = c_saved.get("mapping", {})
-
-            def c_pick(label, keywords):
-                saved_val = c_map.get(label)
-                if saved_val and saved_val in c_cols:
-                    default = saved_val
-                else:
-                    default = next((col for kw in keywords for col in c_df_raw.columns if kw in col), "（使わない）")
-                return st.selectbox(label, c_cols, index=c_cols.index(default), key=f"cmap_{label}")
-
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                c_col_date    = c_pick("記録日",           ["日付", "記録日", "date"])
-                c_col_company = c_pick("会社名",           ["会社名"])
-                c_col_result  = c_pick("アポ結果",         ["結果", "アポ", "商談結果"])
-                c_col_reject  = c_pick("断り理由",         ["断り", "理由"])
-                c_col_scale   = c_pick("規模",             ["規模", "社員数", "従業員"])
-                c_col_ng      = c_pick("NG理由",          ["NG", "理由"])
-            with cc2:
-                c_col_temp    = c_pick("温度感",           ["温度"])
-                c_col_good    = c_pick("反応が良かったポイント", ["ポイント", "反応"])
-                c_col_memo    = c_pick("メモ",             ["メモ", "備考"])
-
-            c_apo_kw = st.text_input(
-                "アポ獲得と判定するキーワード（カンマ区切り）",
-                value=c_saved.get("apo_keywords", "アポ獲得,アポ,体験会確定,契約"),
-                key="c_apo_kw",
-            )
-            c_apo_keywords = [k.strip() for k in c_apo_kw.split(",") if k.strip()]
-
-            def c_convert(row) -> dict | None:
-                company = row.get(c_col_company, "").strip() if c_col_company != "（使わない）" else ""
-                if not company:
-                    return None
-                result = row.get(c_col_result, "").strip() if c_col_result != "（使わない）" else ""
-                return {
-                    "記録日":   row.get(c_col_date,  "").strip() if c_col_date  != "（使わない）" else "",
-                    "会社名":   company,
-                    "アプローチ結果": result,
-                    "アポ獲得":  "はい" if any(kw in result for kw in c_apo_keywords) else "いいえ",
-                    "規模":     row.get(c_col_scale, "").strip() if c_col_scale != "（使わない）" else "",
-                    "NG理由":  row.get(c_col_ng,    "").strip() if c_col_ng    != "（使わない）" else "",
-                    "断り理由":  row.get(c_col_reject, "").strip() if c_col_reject != "（使わない）" else "",
-                    "温度感":   row.get(c_col_temp,   "").strip() if c_col_temp   != "（使わない）" else "",
-                    "反応が良かったポイント": row.get(c_col_good, "").strip() if c_col_good != "（使わない）" else "",
-                    "メモ":     row.get(c_col_memo,   "").strip() if c_col_memo   != "（使わない）" else "",
-                }
-
-            c_preview = [r for r in (c_convert(row) for _, row in c_df_raw.iterrows()) if r]
-            st.markdown(f"**変換プレビュー（先頭3件）** ※合計 {len(c_preview)} 件")
-            if c_preview:
-                st.dataframe(pd.DataFrame(c_preview[:3]), use_container_width=True, hide_index=True)
-
-                df_fb_ex = load_feedback()
-                existing = set(df_fb_ex["会社名"].dropna().tolist()) if not df_fb_ex.empty else set()
-                c_new = [r for r in c_preview if r["会社名"] not in existing]
-                if len(c_preview) - len(c_new):
-                    st.info(f"既存と重複: {len(c_preview) - len(c_new)}件スキップ")
-
-                if st.button(f"✅ {len(c_new)}件をコール記録に取り込む", type="primary", disabled=len(c_new) == 0, key="c_import_btn"):
-                    import csv as _csv2
-                    os.makedirs(OUTPUT_DIR, exist_ok=True)
-                    f_exists = os.path.exists(FEEDBACK_FILE) and os.path.getsize(FEEDBACK_FILE) > 0
-                    fields = ["記録日", "会社名", "アプローチ結果", "アポ獲得", "規模", "NG理由", "断り理由", "温度感", "反応が良かったポイント", "メモ"]
-                    with open(FEEDBACK_FILE, "a", newline="", encoding="utf-8-sig") as f:
-                        w = _csv2.DictWriter(f, fieldnames=fields)
-                        if not f_exists:
-                            w.writeheader()
-                        for r in c_new:
-                            w.writerow(r)
-                    # 設定を記憶
-                    _save_import_settings("call", {
-                        "filepath": c_filepath if c_src_mode.startswith("📂") else "",
-                        "mapping": {
-                            "記録日": c_col_date, "会社名": c_col_company, "アポ結果": c_col_result,
-                            "規模": c_col_scale, "NG理由": c_col_ng,
-                            "断り理由": c_col_reject, "温度感": c_col_temp,
-                            "反応が良かったポイント": c_col_good, "メモ": c_col_memo,
-                        },
-                        "apo_keywords": c_apo_kw,
-                    })
-                    st.success(f"✅ {len(c_new)}件を取り込みました。設定を記憶しました。")
-                    st.rerun()
 
 
 # ──────────────────────────────
@@ -1982,477 +1795,232 @@ with tab_calllist:
                         st.success(f"記録しました: **{il_selected}** — {il_result}")
                     st.rerun()
 
-
 # ──────────────────────────────
-# TAB6: 商談記録
+# TAB: 商談一覧
 # ──────────────────────────────
 
-_MEETING_FIELDS_FILE = os.path.join(OUTPUT_DIR, "meeting_fields.json")
-
-
-def load_meeting_custom_fields() -> list[dict]:
-    """カスタム商談項目の定義を読み込む"""
-    if os.path.exists(_MEETING_FIELDS_FILE):
-        try:
-            with open(_MEETING_FIELDS_FILE, "r", encoding="utf-8") as f:
-                return _json_mod.load(f).get("custom_fields", [])
-        except Exception:
-            pass
-    return []
-
-
-def save_meeting_custom_fields(fields: list[dict]):
-    """カスタム商談項目の定義を保存する"""
+def _save_meeting_row(row_data: dict):
+    """商談一覧CSVに1行追記する"""
+    import csv as _csv_m
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(_MEETING_FIELDS_FILE, "w", encoding="utf-8") as f:
-        _json_mod.dump({"custom_fields": fields}, f, ensure_ascii=False, indent=2)
-
-
-def _ensure_meetings_columns(new_cols: list[str]):
-    """meetings.csv に新しい列を追加（既存データ保持）"""
-    if not os.path.exists(MEETINGS_FILE):
-        return
-    try:
-        df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig", dtype=str).fillna("")
-        added = False
-        for col in new_cols:
-            if col not in df.columns:
-                df[col] = ""
-                added = True
-        if added:
-            df.to_csv(MEETINGS_FILE, index=False, encoding="utf-8-sig")
-    except Exception:
-        pass
+    file_exists = os.path.exists(MEETINGS_FILE) and os.path.getsize(MEETINGS_FILE) > 0
+    with open(MEETINGS_FILE, "a", newline="", encoding="utf-8-sig") as f:
+        writer = _csv_m.DictWriter(f, fieldnames=_MEETING_COLS, extrasaction="ignore")
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row_data)
 
 
 with tab_meeting:
-    st.subheader("商談記録")
+    st.subheader("商談一覧")
 
-    mtab_input, mtab_list, mtab_pipeline, mtab_csv, mtab_settings = st.tabs(
-        ["✏️ 新規入力", "📋 一覧・検索", "📊 パイプライン", "📥 CSVインポート", "⚙️ 項目設定"]
-    )
+    mtab_input, mtab_list, mtab_pipeline = st.tabs(["✏️ 新規入力", "📋 一覧・検索", "📊 集計"])
 
-    # ── 新規入力 ───────────────────────────────────────────────
+    # ── 新規入力 ────────────────────────────────────────────────
     with mtab_input:
-        companies = load_company_list()
+        from datetime import date as _mt_date
+        from config import HUBSPOT_TOKEN as _MT_HS_TOKEN
 
-        col_m1, col_m2 = st.columns([2, 1])
+        st.markdown("#### アポ情報")
+        mt_col1, mt_col2, mt_col3 = st.columns(3)
+        with mt_col1:
+            mt_apo_month   = st.text_input("アポ獲得月", placeholder="2026-03", key="mt_apo_month")
+            mt_apo_getter  = st.text_input("アポ獲得者", placeholder="野村", key="mt_apo_getter")
+            mt_listup      = st.text_input("リストアップ（担当者）", placeholder="橘爪", key="mt_listup")
+        with mt_col2:
+            mt_company     = st.text_input("企業名 *", placeholder="株式会社〇〇", key="mt_company")
+            mt_url         = st.text_input("企業URL", placeholder="https://", key="mt_url")
+            mt_industry    = st.text_input("業種", placeholder="IT / 製造 等", key="mt_industry")
+        with mt_col3:
+            mt_summary     = st.text_area("アポ獲得概要", placeholder="社長と話せた。健康経営に興味あり。", height=90, key="mt_summary")
+            mt_apo_tanto   = st.text_input("アポ担当（架電者）", placeholder="野村", key="mt_apo_tanto")
 
-        with col_m1:
-            if companies:
-                m_input_mode = st.radio(
-                    "会社名", ["リストから選択", "直接入力"], horizontal=True, label_visibility="collapsed"
-                )
-            else:
-                m_input_mode = "直接入力"
+        st.markdown("#### 前確認・実施")
+        mt_col4, mt_col5, mt_col6 = st.columns(3)
+        with mt_col4:
+            mt_pre_check   = st.selectbox("前確認実施済", ["", "済", "未"], key="mt_pre_check")
+            mt_apo_date    = st.date_input("アポ獲得日", value=None, key="mt_apo_date")
+        with mt_col5:
+            mt_plan_date   = st.date_input("アポ実施予定日", value=None, key="mt_plan_date")
+            mt_jisshi      = st.selectbox("実施の有無", ["", "実施済", "未実施", "延期", "キャンセル"], key="mt_jisshi")
+        with mt_col6:
+            mt_apo_exec    = st.text_input("アポ実施担当者", placeholder="橘爪", key="mt_apo_exec")
+            mt_sekinin     = st.selectbox("責任者の有無", ["", "あり", "なし"], key="mt_sekinin")
 
-            if m_input_mode == "リストから選択" and companies:
-                m_company = st.selectbox("会社名", companies, key="m_company_select")
-            else:
-                m_company = st.text_input("会社名", placeholder="株式会社〇〇", key="m_company_text")
+        st.markdown("#### 商談結果")
+        mt_col7, mt_col8, mt_col9 = st.columns(3)
+        with mt_col7:
+            mt_result      = st.selectbox("商談結果", ["", "検討中", "次回アポあり", "受注", "失注", "保留", "再アプローチ", "その他"], key="mt_result")
+            mt_shissou_r   = st.text_input("失注理由", placeholder="予算なし / 競合 等", key="mt_shissou_r")
+        with mt_col8:
+            mt_shissou_d   = st.text_area("失注理由（詳細）", height=70, key="mt_shissou_d")
+        with mt_col9:
+            mt_status      = st.selectbox("ステータス", ["", "進行中", "完了", "保留", "クローズ"], key="mt_status")
+            mt_mikomi      = st.selectbox("見込み", ["", "A", "B", "C"], key="mt_mikomi")
 
-            m_contact = st.text_input("担当者名（相手先）", placeholder="山田 太郎（役職）")
+        st.markdown("#### 担当者・次回アクション")
+        mt_col10, mt_col11, mt_col12 = st.columns(3)
+        with mt_col10:
+            mt_re_tanto    = st.text_input("再アプローチ担当", key="mt_re_tanto")
+            mt_ap_tanto    = st.text_input("アプローチ担当名", key="mt_ap_tanto")
+        with mt_col11:
+            mt_yakusyoku   = st.text_input("役職", placeholder="社長 / 人事部長 等", key="mt_yakusyoku")
+            mt_tel         = st.text_input("電話番号", key="mt_tel")
+        with mt_col12:
+            mt_ap_content  = st.text_area("アプローチ内容", height=70, key="mt_ap_content")
+            mt_next_date   = st.date_input("次回アプローチ日", value=None, key="mt_next_date")
 
-            m_phase = st.selectbox(
-                "フェーズ",
-                ["初回商談", "2回目商談", "提案・デモ", "見積提出", "クロージング", "その他"],
-            )
+        _mt_sync_hs = st.checkbox(
+            "HubSpotの取引（Deal）にも登録する",
+            value=bool(_MT_HS_TOKEN),
+            disabled=not _MT_HS_TOKEN,
+            key="mt_sync_hs",
+            help="商談をHubSpotのDealとして作成し、会社に紐付けます。" if _MT_HS_TOKEN else "HubSpot連携には HUBSPOT_TOKEN の設定が必要です",
+        )
 
-            m_result = st.selectbox(
-                "商談結果",
-                ["検討中", "次回アポあり", "契約", "保留", "NG（競合）", "NG（予算）", "NG（タイミング）", "その他"],
-            )
+        if st.button("✅ 商談を記録する", type="primary", disabled=not mt_company, key="mt_submit"):
+            from datetime import datetime as _mt_dt
+            _mt_row = {
+                "記録日":        _mt_dt.now().strftime("%Y-%m-%d"),
+                "アポ獲得月":     mt_apo_month,
+                "アポ獲得者":     mt_apo_getter,
+                "リストアップ":   mt_listup,
+                "企業名":         mt_company,
+                "アポ獲得概要":   mt_summary,
+                "アポ担当":       mt_apo_tanto,
+                "前確認実施済":   mt_pre_check,
+                "アポ獲得日":     str(mt_apo_date) if mt_apo_date else "",
+                "アポ実施予定日":  str(mt_plan_date) if mt_plan_date else "",
+                "実施の有無":     mt_jisshi,
+                "商談結果":       mt_result,
+                "責任者の有無":   mt_sekinin,
+                "アポ実施担当者":  mt_apo_exec,
+                "失注理由":       mt_shissou_r,
+                "失注理由（詳細）": mt_shissou_d,
+                "業種":           mt_industry,
+                "企業URL":        mt_url,
+                "再アプローチ担当": mt_re_tanto,
+                "アプローチ担当名": mt_ap_tanto,
+                "役職":           mt_yakusyoku,
+                "電話番号":       mt_tel,
+                "ステータス":     mt_status,
+                "見込み":         mt_mikomi,
+                "アプローチ内容":  mt_ap_content,
+                "次回アプローチ日": str(mt_next_date) if mt_next_date else "",
+            }
+            _save_meeting_row(_mt_row)
 
-        with col_m2:
-            m_date = st.date_input("商談日", value="today")
-            m_contracted = m_result == "契約"
-            if m_contracted:
-                st.success("🎉 契約！")
-            # パスアポ対応者（架電担当）をデフォルト候補として表示
-            _clist_m = load_call_list()
-            _m_persons_col = "架電担当者名" if "架電担当者名" in _clist_m.columns else "担当名"
-            _m_persons = sorted(_clist_m[_m_persons_col].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_m.empty else []
-            if _m_persons:
-                m_tantosha = st.selectbox("担当名（パスアポ対応者）", [""] + _m_persons, key="m_tantosha_sel")
-            else:
-                m_tantosha = st.text_input("担当名（パスアポ対応者）", placeholder="野村 / 橘爪", key="m_tantosha_text")
-            m_deal_size = st.text_input("規模感・金額", placeholder="月額 5万円 / 50名")
-            m_next_action = st.text_input("次のアクション", placeholder="来週再提案 / 稟議待ち")
-
-            from config import HUBSPOT_TOKEN as _MT_HS_TOKEN
-            _mt_sync_hs = st.checkbox(
-                "HubSpotにも記録を反映する",
-                value=bool(_MT_HS_TOKEN),
-                key="mt_sync_hs",
-                disabled=not _MT_HS_TOKEN,
-                help="商談記録をHubSpotのノートとして登録します。" if _MT_HS_TOKEN else "HubSpot連携には HUBSPOT_TOKEN の設定が必要です",
-            )
-
-        m_memo = st.text_area("メモ", placeholder="ヒアリング内容・懸念点・提案内容など", height=100)
-
-        # カスタム項目のレンダリング
-        m_custom_values: dict = {}
-        _custom_fields = load_meeting_custom_fields()
-        if _custom_fields:
-            st.divider()
-            st.caption("カスタム項目")
-            _cf_col1, _cf_col2 = st.columns(2)
-            for _i, _cf in enumerate(_custom_fields):
-                _fname = _cf["name"]
-                _ftype = _cf.get("type", "text")
-                _container = _cf_col1 if _i % 2 == 0 else _cf_col2
-                with _container:
-                    if _ftype == "selectbox":
-                        _opts = [o.strip() for o in _cf.get("options", "").split(",") if o.strip()]
-                        m_custom_values[_fname] = st.selectbox(_fname, [""] + _opts, key=f"m_cf_{_fname}")
-                    else:
-                        m_custom_values[_fname] = st.text_input(_fname, key=f"m_cf_{_fname}")
-
-        m_submitted = st.button("✅ 商談を記録する", type="primary", disabled=not m_company)
-
-        if m_submitted and m_company:
-            record_meeting(
-                company_name=m_company,
-                contact_name=m_contact,
-                meeting_date=str(m_date),
-                phase=m_phase,
-                result=m_result,
-                contracted=m_contracted,
-                next_action=m_next_action,
-                deal_size=m_deal_size,
-                memo=m_memo,
-                tantosha=m_tantosha,
-                extra_fields=m_custom_values if m_custom_values else None,
-            )
             if _mt_sync_hs and _MT_HS_TOKEN:
-                _ok = _hubspot_push_meeting_note(m_company, m_contact, m_phase, m_result, m_memo, m_tantosha, _MT_HS_TOKEN)
+                _ok = _hubspot_push_deal(_mt_row, _MT_HS_TOKEN)
                 if _ok:
-                    st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}　✅ HubSpotにも同期済み")
+                    st.success(f"記録しました: **{mt_company}**　✅ HubSpot取引にも登録済み")
                 else:
-                    st.warning(f"記録しました: **{m_company}** — {m_phase} / {m_result}　⚠️ HubSpot同期に失敗しました")
+                    st.warning(f"記録しました: **{mt_company}**　⚠️ HubSpot取引登録に失敗しました")
             else:
-                st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}")
+                st.success(f"記録しました: **{mt_company}**")
             st.rerun()
 
-        # 直近5件
-        st.divider()
-        st.caption("直近の商談記録")
-        df_mt = load_meetings()
-        if not df_mt.empty:
-            recent_mt = df_mt.sort_values("商談日", ascending=False).head(5)
-            st.dataframe(
-                recent_mt[["商談日", "会社名", "担当者名", "フェーズ", "商談結果", "次のアクション"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.caption("まだ記録がありません")
-
-    # ── 一覧・検索 ─────────────────────────────────────────────
+    # ── 一覧・検索 ──────────────────────────────────────────────
     with mtab_list:
         df_mt = load_meetings()
         if df_mt.empty:
             st.info("まだ商談記録がありません。「新規入力」から登録してください。")
         else:
-            col_f1, col_f2, col_f3 = st.columns(3)
-            with col_f1:
-                filter_phase = st.multiselect("フェーズで絞り込み", options=df_mt["フェーズ"].dropna().unique().tolist())
-            with col_f2:
-                filter_result = st.multiselect("商談結果で絞り込み", options=df_mt["商談結果"].dropna().unique().tolist())
-            with col_f3:
-                m_search = st.text_input("会社名で検索", key="m_search")
+            # フィルター
+            mf1, mf2, mf3, mf4 = st.columns(4)
+            with mf1:
+                _mt_results = ["全て"] + [v for v in df_mt["商談結果"].dropna().unique().tolist() if v]
+                mt_filt_result = st.selectbox("商談結果", _mt_results, key="mt_filt_result")
+            with mf2:
+                _mt_statuses = ["全て"] + [v for v in df_mt["ステータス"].dropna().unique().tolist() if v]
+                mt_filt_status = st.selectbox("ステータス", _mt_statuses, key="mt_filt_status")
+            with mf3:
+                _mt_mikomi_vals = ["全て"] + [v for v in df_mt["見込み"].dropna().unique().tolist() if v]
+                mt_filt_mikomi = st.selectbox("見込み", _mt_mikomi_vals, key="mt_filt_mikomi")
+            with mf4:
+                mt_search = st.text_input("企業名で検索", key="mt_search")
 
             filtered_mt = df_mt.copy()
-            if filter_phase:
-                filtered_mt = filtered_mt[filtered_mt["フェーズ"].isin(filter_phase)]
-            if filter_result:
-                filtered_mt = filtered_mt[filtered_mt["商談結果"].isin(filter_result)]
-            if m_search:
-                filtered_mt = filtered_mt[filtered_mt["会社名"].str.contains(m_search, na=False)]
+            if mt_filt_result != "全て":
+                filtered_mt = filtered_mt[filtered_mt["商談結果"] == mt_filt_result]
+            if mt_filt_status != "全て":
+                filtered_mt = filtered_mt[filtered_mt["ステータス"] == mt_filt_status]
+            if mt_filt_mikomi != "全て":
+                filtered_mt = filtered_mt[filtered_mt["見込み"] == mt_filt_mikomi]
+            if mt_search:
+                filtered_mt = filtered_mt[filtered_mt["企業名"].str.contains(mt_search, na=False)]
 
+            st.caption(f"表示: {len(filtered_mt)}件")
+
+            # 表示列（主要列を先に）
+            _mt_show_cols = [c for c in [
+                "記録日", "アポ獲得月", "企業名", "アポ獲得者", "アポ担当",
+                "アポ実施予定日", "実施の有無", "商談結果", "ステータス", "見込み",
+                "アポ実施担当者", "失注理由", "次回アプローチ日", "アプローチ担当名",
+            ] if c in filtered_mt.columns]
             st.dataframe(
-                filtered_mt.sort_values("商談日", ascending=False),
+                filtered_mt[_mt_show_cols].sort_values("記録日", ascending=False),
                 use_container_width=True,
                 hide_index=True,
             )
 
-            csv_mt = filtered_mt.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-            st.download_button("📥 CSVダウンロード", data=csv_mt, file_name="meetings_export.csv", mime="text/csv")
+            with st.expander("全列表示"):
+                st.dataframe(filtered_mt.sort_values("記録日", ascending=False), use_container_width=True, hide_index=True)
 
-    # ── パイプライン ────────────────────────────────────────────
+            csv_mt = filtered_mt.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button("📥 CSVダウンロード", data=csv_mt, file_name="meetings_export.csv", mime="text/csv", key="mt_dl")
+
+    # ── 集計 ───────────────────────────────────────────────────
     with mtab_pipeline:
         df_mt = load_meetings()
         if df_mt.empty:
-            st.info("データが溜まったら分析できます。")
+            st.info("データが溜まったら集計できます。")
         else:
-            total_mt   = len(df_mt)
-            contracted = (df_mt["契約"] == "はい").sum()
-            cv_rate    = contracted / total_mt * 100 if total_mt > 0 else 0
+            total_mt    = len(df_mt)
+            jisshi_cnt  = (df_mt["実施の有無"] == "実施済").sum()
+            juchu_cnt   = df_mt["商談結果"].str.contains("受注|契約", na=False).sum()
+            cv_rate     = juchu_cnt / total_mt * 100 if total_mt > 0 else 0
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("総商談数", f"{total_mt}件")
-            k2.metric("契約件数", f"{contracted}件")
-            k3.metric("成約率", f"{cv_rate:.1f}%")
-            pending = df_mt[df_mt["商談結果"].isin(["検討中", "次回アポあり", "提案・デモ", "見積提出", "クロージング"])].shape[0]
-            k4.metric("進行中", f"{pending}件")
+            k2.metric("実施済", f"{jisshi_cnt}件")
+            k3.metric("受注件数", f"{juchu_cnt}件")
+            k4.metric("成約率", f"{cv_rate:.1f}%")
 
             st.divider()
-
             col_p1, col_p2 = st.columns(2)
             with col_p1:
-                st.markdown("**フェーズ別件数**")
-                phase_df = df_mt["フェーズ"].value_counts().reset_index()
-                phase_df.columns = ["フェーズ", "件数"]
-                chart_p = alt.Chart(phase_df).mark_bar(color="#4C78A8").encode(
-                    x=alt.X("フェーズ:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
-                    y=alt.Y("件数:Q"),
-                    tooltip=["フェーズ", "件数"],
-                ).properties(height=250)
-                st.altair_chart(chart_p, use_container_width=True)
-
-            with col_p2:
                 st.markdown("**商談結果の内訳**")
-                mresult_df = df_mt["商談結果"].value_counts().reset_index()
-                mresult_df.columns = ["商談結果", "件数"]
-                chart_mr = alt.Chart(mresult_df).mark_bar(color="#72B7B2").encode(
-                    x=alt.X("商談結果:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                _mr_df = df_mt["商談結果"].replace("", "未記入").value_counts().reset_index()
+                _mr_df.columns = ["商談結果", "件数"]
+                chart_mr = alt.Chart(_mr_df).mark_bar(color="#4C78A8").encode(
+                    x=alt.X("商談結果:N", sort="-y", axis=alt.Axis(labelAngle=-30, labelFontSize=11)),
                     y=alt.Y("件数:Q"),
                     tooltip=["商談結果", "件数"],
                 ).properties(height=250)
                 st.altair_chart(chart_mr, use_container_width=True)
+            with col_p2:
+                st.markdown("**見込み別件数**")
+                _mk_df = df_mt["見込み"].replace("", "未記入").value_counts().reset_index()
+                _mk_df.columns = ["見込み", "件数"]
+                chart_mk = alt.Chart(_mk_df).mark_bar(color="#72B7B2").encode(
+                    x=alt.X("見込み:N", sort="-y", axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("件数:Q"),
+                    tooltip=["見込み", "件数"],
+                ).properties(height=250)
+                st.altair_chart(chart_mk, use_container_width=True)
 
-            # 次のアクションが必要な案件
+            # 次回アプローチ要対応一覧
             st.divider()
-            st.markdown("**次のアクションが必要な案件**")
-            action_needed = df_mt[
-                df_mt["商談結果"].isin(["検討中", "次回アポあり", "保留"]) &
-                df_mt["次のアクション"].notna() &
-                (df_mt["次のアクション"] != "")
-            ].sort_values("商談日", ascending=False)
-            if not action_needed.empty:
+            st.markdown("**次回アプローチ要対応**")
+            _action_df = df_mt[
+                df_mt["次回アプローチ日"].replace("", pd.NA).notna() &
+                ~df_mt["商談結果"].str.contains("受注|失注", na=False)
+            ].sort_values("次回アプローチ日")
+            if not _action_df.empty:
                 st.dataframe(
-                    action_needed[["商談日", "会社名", "担当者名", "フェーズ", "商談結果", "次のアクション", "規模感・金額"]],
-                    use_container_width=True,
-                    hide_index=True,
+                    _action_df[[c for c in ["企業名", "アポ実施担当者", "商談結果", "見込み", "次回アプローチ日", "アプローチ内容"] if c in _action_df.columns]],
+                    use_container_width=True, hide_index=True,
                 )
             else:
                 st.caption("対象なし")
-
-    # ── 商談記録 インポート（ファイルパス記憶・Excel対応）────────
-    with mtab_csv:
-        m_saved = _load_import_settings("meeting")
-        st.caption("CSV / Excel (.xlsx) / Googleスプレッドシート を読み込んで商談記録に取り込みます。")
-
-        m_src_mode = st.radio(
-            "ファイルの指定方法",
-            ["📂 パスを直接入力（毎回開く不要）", "⬆️ アップロード", "🔗 Googleスプレッドシート"],
-            horizontal=True,
-            key="m_src_mode",
-        )
-
-        m_df_raw: pd.DataFrame | None = None
-        m_filepath = ""
-
-        if m_src_mode.startswith("📂"):
-            m_default_path = m_saved.get("filepath", "")
-            m_filepath = st.text_input(
-                "ファイルパス（CSV または .xlsx）",
-                value=m_default_path,
-                placeholder=r"C:\Users\user\Desktop\商談管理.xlsx",
-                key="m_filepath",
-            )
-            if m_filepath and os.path.exists(m_filepath):
-                m_df_raw = _read_file_to_df(m_filepath)
-                if m_df_raw is None:
-                    st.error("ファイルを読み込めませんでした。")
-            elif m_filepath:
-                st.warning("ファイルが見つかりません。パスを確認してください。")
-        elif m_src_mode.startswith("⬆️"):
-            m_uploaded2 = st.file_uploader("CSV / Excel を選択", type=["csv", "xlsx", "xls"], key="meeting_file_upload")
-            if m_uploaded2:
-                ext = os.path.splitext(m_uploaded2.name)[1].lower()
-                if ext in (".xlsx", ".xls"):
-                    m_df_raw = pd.read_excel(m_uploaded2, dtype=str).fillna("")
-                else:
-                    raw = m_uploaded2.read()
-                    for enc in ("utf-8-sig", "shift-jis", "cp932", "utf-8"):
-                        try:
-                            m_df_raw = pd.read_csv(_io_mod.StringIO(raw.decode(enc)), dtype=str).fillna("")
-                            break
-                        except Exception:
-                            pass
-                m_filepath = m_uploaded2.name
-        else:
-            # ── Google Sheets 連携 ──────────────────────────────────
-            m_df_raw = _render_gsheets_loader("meeting_gs", m_saved)
-
-        if m_df_raw is not None:
-            st.markdown(f"**読み込み: {len(m_df_raw)}行 / {len(m_df_raw.columns)}列**")
-            st.dataframe(m_df_raw.head(3), use_container_width=True, hide_index=True)
-
-            st.markdown("### 列マッピング")
-            m_cols = ["（使わない）"] + m_df_raw.columns.tolist()
-            m_map = m_saved.get("mapping", {})
-
-            def m_pick(label, keywords):
-                saved_val = m_map.get(label)
-                if saved_val and saved_val in m_cols:
-                    default = saved_val
-                else:
-                    default = next((col for kw in keywords for col in m_df_raw.columns if kw in col), "（使わない）")
-                return st.selectbox(label, m_cols, index=m_cols.index(default), key=f"mmap_{label}")
-
-            mc1, mc2 = st.columns(2)
-            with mc1:
-                m_col_mdate   = m_pick("商談日",       ["商談日", "日付", "date"])
-                m_col_company = m_pick("会社名",       ["会社名"])
-                m_col_contact = m_pick("担当者名",     ["担当者", "氏名", "名前"])
-                m_col_phase   = m_pick("フェーズ",     ["フェーズ", "段階"])
-                m_col_result  = m_pick("商談結果",     ["結果", "商談結果"])
-            with mc2:
-                m_col_deal    = m_pick("規模感・金額", ["金額", "規模", "単価"])
-                m_col_next    = m_pick("次のアクション", ["次", "アクション", "todo"])
-                m_col_memo    = m_pick("メモ",         ["メモ", "備考", "内容"])
-
-            # カスタム項目のマッピング
-            _cf_list_import = load_meeting_custom_fields()
-            _cf_mappings: dict = {}
-            if _cf_list_import:
-                st.markdown("**カスタム項目のマッピング**")
-                _cfc1, _cfc2 = st.columns(2)
-                for _cfi, _cff in enumerate(_cf_list_import):
-                    _cfname = _cff["name"]
-                    _cf_saved_val = m_map.get(_cfname)
-                    _cf_default = _cf_saved_val if (_cf_saved_val and _cf_saved_val in m_cols) else \
-                        next((col for col in m_df_raw.columns if _cfname in col), "（使わない）")
-                    _cf_container = _cfc1 if _cfi % 2 == 0 else _cfc2
-                    with _cf_container:
-                        _cf_mappings[_cfname] = st.selectbox(
-                            _cfname, m_cols, index=m_cols.index(_cf_default), key=f"mmap_cf_{_cfname}"
-                        )
-
-            m_contract_kw = st.text_input(
-                "契約と判定するキーワード（カンマ区切り）",
-                value=m_saved.get("contract_keywords", "契約,成約,クロージング完了"),
-                key="m_contract_kw",
-            )
-            m_contract_keywords = [k.strip() for k in m_contract_kw.split(",") if k.strip()]
-
-            def m_convert(row) -> dict | None:
-                company = row.get(m_col_company, "").strip() if m_col_company != "（使わない）" else ""
-                if not company:
-                    return None
-                result = row.get(m_col_result, "").strip() if m_col_result != "（使わない）" else ""
-                from datetime import date as _date
-                base = {
-                    "記録日":   str(_date.today()),
-                    "商談日":   row.get(m_col_mdate,   "").strip() if m_col_mdate   != "（使わない）" else "",
-                    "会社名":   company,
-                    "担当者名": row.get(m_col_contact, "").strip() if m_col_contact != "（使わない）" else "",
-                    "フェーズ": row.get(m_col_phase,   "").strip() if m_col_phase   != "（使わない）" else "",
-                    "商談結果": result,
-                    "契約":     "はい" if any(kw in result for kw in m_contract_keywords) else "いいえ",
-                    "次のアクション": row.get(m_col_next,  "").strip() if m_col_next  != "（使わない）" else "",
-                    "規模感・金額":   row.get(m_col_deal,  "").strip() if m_col_deal  != "（使わない）" else "",
-                    "メモ":     row.get(m_col_memo,    "").strip() if m_col_memo    != "（使わない）" else "",
-                }
-                for _cfn, _cfcol in _cf_mappings.items():
-                    base[_cfn] = row.get(_cfcol, "").strip() if _cfcol != "（使わない）" else ""
-                return base
-
-            m_preview = [r for r in (m_convert(row) for _, row in m_df_raw.iterrows()) if r]
-            st.markdown(f"**変換プレビュー（先頭3件）** ※合計 {len(m_preview)} 件")
-            if m_preview:
-                st.dataframe(pd.DataFrame(m_preview[:3]), use_container_width=True, hide_index=True)
-
-                df_mt_ex = load_meetings()
-                m_existing = set(df_mt_ex["会社名"].dropna().tolist()) if not df_mt_ex.empty else set()
-                m_new = [r for r in m_preview if r["会社名"] not in m_existing]
-                if len(m_preview) - len(m_new):
-                    st.info(f"既存と重複: {len(m_preview) - len(m_new)}件スキップ")
-
-                if st.button(f"✅ {len(m_new)}件を商談記録に取り込む", type="primary", disabled=len(m_new) == 0, key="m_import_btn"):
-                    import csv as _csv3
-                    os.makedirs(OUTPUT_DIR, exist_ok=True)
-                    m_exists = os.path.exists(MEETINGS_FILE) and os.path.getsize(MEETINGS_FILE) > 0
-                    m_fields = ["記録日", "商談日", "会社名", "担当者名", "フェーズ", "商談結果", "契約", "次のアクション", "規模感・金額", "メモ"]
-                    with open(MEETINGS_FILE, "a", newline="", encoding="utf-8-sig") as f:
-                        w = _csv3.DictWriter(f, fieldnames=m_fields)
-                        if not m_exists:
-                            w.writeheader()
-                        for r in m_new:
-                            w.writerow(r)
-                    # 設定を記憶
-                    _save_import_settings("meeting", {
-                        "filepath": m_filepath if m_src_mode.startswith("📂") else "",
-                        "mapping": {
-                            "商談日": m_col_mdate, "会社名": m_col_company, "担当者名": m_col_contact,
-                            "フェーズ": m_col_phase, "商談結果": m_col_result,
-                            "規模感・金額": m_col_deal, "次のアクション": m_col_next, "メモ": m_col_memo,
-                        },
-                        "contract_keywords": m_contract_kw,
-                    })
-                    st.success(f"✅ {len(m_new)}件を取り込みました。設定を記憶しました。")
-                    st.rerun()
-
-    # ── 項目設定 ────────────────────────────────────────────────
-    with mtab_settings:
-        st.subheader("商談項目のカスタマイズ")
-        st.caption("デフォルト項目（商談日・会社名・フェーズなど）に加えて、独自の項目を追加できます。追加した項目は「新規入力」フォームとCSVインポートの列マッピングに反映されます。")
-
-        _cf_list = load_meeting_custom_fields()
-
-        with st.expander("デフォルト項目（変更不可）", expanded=False):
-            for _default in ["商談日", "会社名", "担当者名", "フェーズ", "商談結果", "次のアクション", "規模感・金額", "メモ"]:
-                st.write(f"• {_default}")
-
-        st.divider()
-
-        if _cf_list:
-            st.markdown("**追加済みカスタム項目**")
-            for _ci, _cf in enumerate(_cf_list):
-                _c1, _c2, _c3 = st.columns([3, 3, 1])
-                with _c1:
-                    st.write(f"**{_cf['name']}**")
-                with _c2:
-                    if _cf.get("type") == "selectbox":
-                        st.caption(f"選択肢: {_cf.get('options', '')}")
-                    else:
-                        st.caption("テキスト入力")
-                with _c3:
-                    if st.button("削除", key=f"del_cf_{_ci}"):
-                        _cf_list.pop(_ci)
-                        save_meeting_custom_fields(_cf_list)
-                        st.rerun()
-        else:
-            st.info("カスタム項目はまだありません。")
-
-        st.divider()
-        st.markdown("**新しい項目を追加**")
-
-        _add_col1, _add_col2 = st.columns(2)
-        with _add_col1:
-            _new_name = st.text_input("項目名", placeholder="例: 予算感 / 担当部署 / 決裁者")
-        with _add_col2:
-            _new_type = st.radio("入力タイプ", ["テキスト入力", "選択肢"], horizontal=True, key="cf_type_radio")
-
-        _new_options = ""
-        if _new_type == "選択肢":
-            _new_options = st.text_input("選択肢をカンマ区切りで入力", placeholder="例: 社長,部長,担当者")
-
-        if st.button("➕ 項目を追加", type="primary", disabled=not _new_name):
-            _existing_names = [_cf["name"] for _cf in _cf_list]
-            if _new_name in _existing_names:
-                st.warning("同じ名前の項目がすでに存在します。")
-            else:
-                _new_cf: dict = {
-                    "name": _new_name,
-                    "type": "selectbox" if _new_type == "選択肢" else "text",
-                }
-                if _new_type == "選択肢":
-                    _new_cf["options"] = _new_options
-                _cf_list.append(_new_cf)
-                save_meeting_custom_fields(_cf_list)
-                _ensure_meetings_columns([_new_name])
-                st.success(f"「{_new_name}」を追加しました。")
-                st.rerun()
