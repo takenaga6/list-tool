@@ -1339,6 +1339,103 @@ with tab_calllist:
     # ── インポート ─────────────────────────────────────────────────
     with cl_import:
         cl_saved = _load_import_settings("calllist")
+
+        # ── HubSpotから直接読み込む ────────────────────────────────
+        from config import HUBSPOT_TOKEN
+        if HUBSPOT_TOKEN:
+            st.markdown("### 🔗 HubSpotから読み込む（推奨）")
+            st.caption("リストアップで登録した企業を自動取得します。新規登録分も随時反映できます。")
+
+            hs_col1, hs_col2 = st.columns([2, 1])
+            with hs_col1:
+                hs_max = st.number_input("最大取得件数", min_value=50, max_value=2000, value=500, step=50, key="hs_max")
+                hs_overwrite = st.radio("取り込みモード", ["追加（既存に追加）", "上書き（全て置き換え）"], horizontal=True, key="hs_overwrite")
+            with hs_col2:
+                st.markdown("　")
+                hs_btn = st.button("📥 HubSpotから取得", type="primary", key="hs_fetch_btn", use_container_width=True)
+
+            if hs_btn:
+                import requests as _req
+                _hs_headers = {
+                    "Authorization": f"Bearer {HUBSPOT_TOKEN}",
+                    "Content-Type": "application/json",
+                }
+                _hs_companies = []
+                _hs_after = None
+                _hs_base = "https://api.hubapi.com"
+
+                with st.spinner("HubSpotから企業情報を取得中..."):
+                    try:
+                        while len(_hs_companies) < hs_max:
+                            _hs_params = {
+                                "limit": min(100, hs_max - len(_hs_companies)),
+                                "properties": "name,phone,website,description,state,city",
+                            }
+                            if _hs_after:
+                                _hs_params["after"] = _hs_after
+                            _hs_resp = _req.get(
+                                f"{_hs_base}/crm/v3/objects/companies",
+                                headers=_hs_headers,
+                                params=_hs_params,
+                                timeout=15,
+                            )
+                            if not _hs_resp.ok:
+                                st.error(f"HubSpot APIエラー: {_hs_resp.status_code} — {_hs_resp.text[:200]}")
+                                break
+                            _hs_data = _hs_resp.json()
+                            _hs_companies.extend(_hs_data.get("results", []))
+                            _hs_paging = _hs_data.get("paging", {}).get("next", {})
+                            _hs_after = _hs_paging.get("after")
+                            if not _hs_after:
+                                break
+
+                        if _hs_companies:
+                            _hs_rows = []
+                            for _c in _hs_companies:
+                                _p = _c.get("properties", {})
+                                _name = (_p.get("name") or "").strip()
+                                if not _name:
+                                    continue
+                                _hs_rows.append({
+                                    "会社名":   _name,
+                                    "電話番号": (_p.get("phone") or "").strip(),
+                                    "代表者":   "",
+                                    "担当名":   "",
+                                    "リスト名": (_p.get("state") or _p.get("city") or "").strip(),
+                                    "HPリンク": (_p.get("website") or "").strip(),
+                                    "説明":     (_p.get("description") or "").strip(),
+                                })
+
+                            _hs_df = pd.DataFrame(_hs_rows)
+                            st.success(f"✅ {len(_hs_df)}件取得しました")
+                            st.dataframe(_hs_df.head(5), use_container_width=True, hide_index=True)
+
+                            os.makedirs(OUTPUT_DIR, exist_ok=True)
+                            if hs_overwrite.startswith("追加"):
+                                _existing_cl = load_call_list()
+                                if not _existing_cl.empty:
+                                    _existing_names = set(_existing_cl["会社名"].tolist())
+                                    _hs_df = _hs_df[~_hs_df["会社名"].isin(_existing_names)]
+                                _mode = "a"
+                                _header = not os.path.exists(CALL_LIST_FILE) or os.path.getsize(CALL_LIST_FILE) == 0
+                            else:
+                                _mode = "w"
+                                _header = True
+
+                            _hs_df.to_csv(CALL_LIST_FILE, mode=_mode, index=False, encoding="utf-8-sig", header=_header)
+                            st.success(f"架電先リストに{len(_hs_df)}件を保存しました。「リスト表示」タブで確認できます。")
+                            st.rerun()
+                        else:
+                            st.warning("取得できた企業が0件でした。HubSpotに企業が登録されているか確認してください。")
+                    except Exception as _e:
+                        st.error(f"取得エラー: {_e}")
+
+            st.divider()
+        else:
+            st.info("💡 HubSpot連携を使うには、環境変数 `HUBSPOT_TOKEN` を設定してください。設定後はHubSpotから直接取得できます。")
+            st.divider()
+
+        st.markdown("### 📁 ファイルから読み込む")
         cl_src_mode = st.radio(
             "ファイルの指定方法",
             ["📂 パスを直接入力", "⬆️ アップロード", "🔗 Googleスプレッドシート"],
