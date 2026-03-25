@@ -62,6 +62,38 @@ def load_company_list() -> list[str]:
     return []
 
 
+_CALL_LIST_COLS = ["会社名", "電話番号", "代表者", "担当名", "リスト名", "HPリンク", "説明"]
+
+
+def load_call_list() -> pd.DataFrame:
+    """架電先リストをCSVから読み込む"""
+    if os.path.exists(CALL_LIST_FILE):
+        try:
+            df = pd.read_csv(CALL_LIST_FILE, encoding="utf-8-sig", dtype=str).fillna("")
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=_CALL_LIST_COLS)
+
+
+def load_meetings() -> pd.DataFrame:
+    """商談記録をCSVから読み込む（後方互換: 担当名列がない場合は空列追加）"""
+    if os.path.exists(MEETINGS_FILE):
+        try:
+            df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig")
+            df["商談日"] = pd.to_datetime(df["商談日"], errors="coerce")
+            df["記録日"] = pd.to_datetime(df["記録日"], errors="coerce")
+            if "担当名" not in df.columns:
+                df["担当名"] = ""
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=[
+        "記録日", "商談日", "会社名", "担当者名", "フェーズ",
+        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ", "担当名"
+    ])
+
+
 def _load_import_settings(key: str) -> dict:
     """インポート設定（ファイルパス・列マッピング）をJSONから読み込む"""
     try:
@@ -1244,42 +1276,6 @@ with tab_listup:
         st.divider()
         st.caption("前回の確認モード結果が残っています。")
         _show_pending_review_ui()
-
-
-# ──────────────────────────────
-# 架電先リスト ユーティリティ
-# ──────────────────────────────
-
-_CALL_LIST_COLS = ["会社名", "電話番号", "代表者", "担当名", "リスト名", "HPリンク", "説明"]
-
-
-def load_call_list() -> pd.DataFrame:
-    """架電先リストをCSVから読み込む"""
-    if os.path.exists(CALL_LIST_FILE):
-        try:
-            df = pd.read_csv(CALL_LIST_FILE, encoding="utf-8-sig", dtype=str).fillna("")
-            return df
-        except Exception:
-            pass
-    return pd.DataFrame(columns=_CALL_LIST_COLS)
-
-
-def load_meetings() -> pd.DataFrame:
-    """商談記録をCSVから読み込む（後方互換: 担当名列がない場合は空列追加）"""
-    if os.path.exists(MEETINGS_FILE):
-        try:
-            df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig")
-            df["商談日"] = pd.to_datetime(df["商談日"], errors="coerce")
-            df["記録日"] = pd.to_datetime(df["記録日"], errors="coerce")
-            if "担当名" not in df.columns:
-                df["担当名"] = ""
-            return df
-        except Exception:
-            pass
-    return pd.DataFrame(columns=[
-        "記録日", "商談日", "会社名", "担当者名", "フェーズ",
-        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ", "担当名"
-    ])
 
 
 # ──────────────────────────────
