@@ -29,6 +29,7 @@ DOMAIN_FAIL_FILE = os.path.join(OUTPUT_DIR, "domain_fail_stats.json")    # 失�
 EXCLUDE_LIST_CSV = os.path.join(OUTPUT_DIR, "exclude_list.csv")          # 手動編集可能な除外ドメインCSV
 FEEDBACK_FILE = os.path.join(OUTPUT_DIR, "feedback.csv")                 # テレアポ結果フィードバック
 MEETINGS_FILE = os.path.join(OUTPUT_DIR, "meetings.csv")                 # 商談記録
+CALL_LIST_FILE = os.path.join(OUTPUT_DIR, "call_list.csv")               # 架電先リスト
 IMPORT_SETTINGS_FILE = os.path.join(OUTPUT_DIR, "import_settings.json") # インポート設定の記憶
 
 
@@ -142,6 +143,7 @@ def record_feedback(
     ng_reason: str = "",
     good_points: str = "",
     memo: str = "",
+    tantosha: str = "",   # 架電担当者名
 ):
     """
     テレアポ結果をfeedback.csvに記録する。
@@ -165,15 +167,16 @@ def record_feedback(
     fieldnames = [
         "記録日", "会社名", "アプローチ結果", "アポ獲得",
         "規模", "NG理由", "断り理由", "温度感", "検索クエリ",
-        "反応が良かったポイント", "メモ"
+        "反応が良かったポイント", "メモ", "担当名"
     ]
 
-    # 既存のfeedback.csvに「検索クエリ」列がない場合はヘッダーを書き換えて追加（既存データは保持）
+    # 既存のfeedback.csvに列が足りない場合はヘッダーを書き換えて追加（既存データは保持）
     if file_exists:
         try:
             with open(FEEDBACK_FILE, "r", encoding="utf-8-sig") as f:
                 first_line = f.readline().strip()
-            if "検索クエリ" not in first_line.split(","):
+            existing_cols = first_line.split(",")
+            if "検索クエリ" not in existing_cols or "担当名" not in existing_cols:
                 # 既存データを読み込み直し（ヘッダーあり）
                 with open(FEEDBACK_FILE, "r", encoding="utf-8-sig") as f:
                     reader = _csv.DictReader(f)
@@ -183,7 +186,10 @@ def record_feedback(
                     writer = _csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
                     for row in rows:
-                        row["検索クエリ"] = ""
+                        if "検索クエリ" not in row:
+                            row["検索クエリ"] = ""
+                        if "担当名" not in row:
+                            row["担当名"] = ""
                         writer.writerow(row)
         except Exception:
             pass
@@ -205,6 +211,7 @@ def record_feedback(
             "検索クエリ":       query,
             "反応が良かったポイント": good_points,
             "メモ":             memo,
+            "担当名":           tantosha,
         })
 
     # 見込み/NG情報を学習に活用する（検索クエリに連携）
@@ -242,6 +249,7 @@ def record_meeting(
     next_action: str = "",
     deal_size: str = "",
     memo: str = "",
+    tantosha: str = "",   # パスアポ対応者名
     extra_fields: dict | None = None,
 ):
     """商談結果を meetings.csv に記録する。extra_fields でカスタム項目を追加できる。"""
@@ -263,7 +271,7 @@ def record_meeting(
 
     base_fieldnames = [
         "記録日", "商談日", "会社名", "担当者名", "フェーズ",
-        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ"
+        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ", "担当名"
     ]
     all_fields = list(existing_fields) if existing_fields else list(base_fieldnames)
     for key in extra:
@@ -287,6 +295,7 @@ def record_meeting(
             "次のアクション": next_action,
             "規模感・金額":  deal_size,
             "メモ":         memo,
+            "担当名":       tantosha,
         }
         row.update(extra)
         writer.writerow(row)

@@ -12,7 +12,7 @@ import altair as alt
 
 import io as _io_mod
 import json as _json_mod
-from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, IMPORT_SETTINGS_FILE, OUTPUT_DIR, record_feedback, record_meeting
+from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, IMPORT_SETTINGS_FILE, OUTPUT_DIR, record_feedback, record_meeting
 
 _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,8 +27,8 @@ st.set_page_config(
 
 st.title("📋 Offi-Stretch リスト管理")
 
-tab_call, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
-    ["📞 架電記録", "⏳ 確認待ち", "📋 履歴", "📊 分析", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
+tab_calllist, tab_call, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
+    ["📋 架電先リスト", "📞 架電記録", "⏳ 確認待ち", "📋 履歴", "📊 ダッシュボード", "📥 取り込み", "🔍 リストアップ", "🤝 商談記録"]
 )
 
 
@@ -41,10 +41,13 @@ def load_feedback() -> pd.DataFrame:
         try:
             df = pd.read_csv(FEEDBACK_FILE, encoding="utf-8-sig")
             df["記録日"] = pd.to_datetime(df["記録日"], errors="coerce")
+            # 後方互換: 担当名列がない古いCSVに対応
+            if "担当名" not in df.columns:
+                df["担当名"] = ""
             return df
         except Exception:
             pass
-    return pd.DataFrame(columns=["記録日", "会社名", "アプローチ結果", "アポ獲得", "規模", "NG理由", "断り理由", "温度感", "検索クエリ", "反応が良かったポイント", "メモ"])
+    return pd.DataFrame(columns=["記録日", "会社名", "アプローチ結果", "アポ獲得", "規模", "NG理由", "断り理由", "温度感", "検索クエリ", "反応が良かったポイント", "メモ", "担当名"])
 
 
 def load_company_list() -> list[str]:
@@ -391,6 +394,13 @@ with tab_call:
 
         with col2:
             st.markdown("　")
+            # 架電先リストに担当名があればデフォルトに使う
+            _clist_for_form = load_call_list()
+            _clist_persons = sorted(_clist_for_form["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_for_form.empty else []
+            if _clist_persons:
+                tantosha = st.selectbox("担当名（架電者）", [""] + _clist_persons, key="manual_tantosha")
+            else:
+                tantosha = st.text_input("担当名（架電者）", placeholder="野村 / 橘爪", key="manual_tantosha_text")
             good_points = st.text_input("反応が良かったポイント", placeholder="健康経営に興味あり 等")
             memo = st.text_area("メモ", placeholder="折り返し希望・担当者名 等", height=120)
 
@@ -408,6 +418,7 @@ with tab_call:
                 ng_reason=ng_reason,
                 good_points=good_points,
                 memo=memo,
+                tantosha=tantosha,
             )
             st.success(f"記録しました: **{company_name}** — {approach_result}")
             st.rerun()
@@ -418,7 +429,7 @@ with tab_call:
         if not df_fb.empty:
             recent = df_fb.sort_values("記録日", ascending=False).head(10)
             display_cols = [
-                c for c in ["記録日", "会社名", "アプローチ結果", "規模", "NG理由", "断り理由", "温度感", "メモ"]
+                c for c in ["記録日", "担当名", "会社名", "アプローチ結果", "規模", "NG理由", "断り理由", "温度感", "メモ"]
                 if c in recent.columns
             ]
             st.dataframe(
@@ -581,7 +592,7 @@ with tab_history:
         st.info("まだ記録がありません。「コール記録」タブから入力してください。")
     else:
         # フィルター
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             filter_result = st.multiselect(
                 "架電結果で絞り込み",
@@ -593,6 +604,9 @@ with tab_history:
                 options=["A", "B", "C", "なし"],
             )
         with col_f3:
+            tantosha_opts = sorted(df_fb["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if "担当名" in df_fb.columns else []
+            filter_tantosha = st.multiselect("担当名で絞り込み", options=tantosha_opts)
+        with col_f4:
             search_name = st.text_input("会社名で検索")
 
         filtered = df_fb.copy()
@@ -600,6 +614,8 @@ with tab_history:
             filtered = filtered[filtered["アプローチ結果"].isin(filter_result)]
         if filter_rank:
             filtered = filtered[filtered["温度感"].isin(filter_rank)]
+        if filter_tantosha and "担当名" in filtered.columns:
+            filtered = filtered[filtered["担当名"].isin(filter_tantosha)]
         if search_name:
             filtered = filtered[filtered["会社名"].str.contains(search_name, na=False)]
 
@@ -622,198 +638,339 @@ with tab_history:
 
 
 # ──────────────────────────────
-# TAB3: 分析
+# TAB3: ダッシュボード
 # ──────────────────────────────
 with tab_analysis:
-    st.subheader("架電傾向分析")
+    st.subheader("ダッシュボード")
 
-    df_fb = load_feedback()
+    dash_integrated, dash_call, dash_meeting = st.tabs(["📊 統合", "📞 架電", "🤝 商談"])
 
-    if df_fb.empty:
-        st.info("データが溜まったら分析できます。まずコール記録を入力してください。")
-    else:
-        total = len(df_fb)
-        apo_count = (df_fb["アポ獲得"] == "はい").sum()
-        apo_rate = apo_count / total * 100 if total > 0 else 0
+    # ── 統合ダッシュボード ──────────────────────────────────────────
+    with dash_integrated:
+        _df_fb_d = load_feedback()
+        _df_mt_d = load_meetings() if os.path.exists(MEETINGS_FILE) else pd.DataFrame()
 
-        # KPI
-        col_k1, col_k2, col_k3, col_k4 = st.columns(4)
-        col_k1.metric("総架電数", f"{total}件")
-        col_k2.metric("アポ獲得数", f"{apo_count}件")
-        col_k3.metric("アポ獲得率", f"{apo_rate:.1f}%")
-        rank_a = (df_fb["温度感"] == "A").sum()
-        col_k4.metric("見込みランクA", f"{rank_a}件")
+        _total_calls  = len(_df_fb_d)
+        _total_mtgs   = len(_df_mt_d) if not _df_mt_d.empty else 0
+        _apo_d        = (_df_fb_d["アポ獲得"] == "はい").sum() if not _df_fb_d.empty else 0
+        _contract_d   = (_df_mt_d["契約"] == "はい").sum() if not _df_mt_d.empty else 0
 
-        st.divider()
+        dk1, dk2, dk3, dk4 = st.columns(4)
+        dk1.metric("総架電数",    f"{_total_calls}件")
+        dk2.metric("アポ獲得数",  f"{_apo_d}件")
+        dk3.metric("総商談数",    f"{_total_mtgs}件")
+        dk4.metric("契約件数",    f"{_contract_d}件")
 
-        col_g1, col_g2 = st.columns(2)
+        # 担当者別サマリー
+        if not _df_fb_d.empty and "担当名" in _df_fb_d.columns:
+            _tanto_col = _df_fb_d[_df_fb_d["担当名"].notna() & (_df_fb_d["担当名"] != "")]
+            if not _tanto_col.empty:
+                st.divider()
+                st.markdown("**担当者別サマリー**")
+                _tanto_summary = _tanto_col.groupby("担当名").agg(
+                    架電数=("会社名", "count"),
+                    アポ数=("アポ獲得", lambda x: (x == "はい").sum()),
+                ).reset_index()
+                _tanto_summary["アポ率(%)"] = (_tanto_summary["アポ数"] / _tanto_summary["架電数"] * 100).round(1)
 
-        with col_g1:
-            st.markdown("**架電結果の内訳**")
-            result_counts = df_fb["アプローチ結果"].value_counts().reset_index()
-            result_counts.columns = ["結果", "件数"]
-            chart_r = alt.Chart(result_counts).mark_bar(color="#4C78A8").encode(
-                x=alt.X("結果:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
-                y=alt.Y("件数:Q"),
-                tooltip=["結果", "件数"],
-            ).properties(height=250)
-            st.altair_chart(chart_r, use_container_width=True)
+                # 商談・契約データを結合
+                if not _df_mt_d.empty and "担当名" in _df_mt_d.columns:
+                    _mt_tanto = _df_mt_d[_df_mt_d["担当名"].notna() & (_df_mt_d["担当名"] != "")].groupby("担当名").agg(
+                        商談数=("会社名", "count"),
+                        契約数=("契約", lambda x: (x == "はい").sum()),
+                    ).reset_index()
+                    _tanto_summary = _tanto_summary.merge(_mt_tanto, on="担当名", how="left").fillna(0)
+                    _tanto_summary["商談数"] = _tanto_summary["商談数"].astype(int)
+                    _tanto_summary["契約数"] = _tanto_summary["契約数"].astype(int)
 
-        with col_g2:
-            st.markdown("**断り理由の内訳**")
-            rejection_df = df_fb[df_fb["断り理由"].notna() & (df_fb["断り理由"] != "")]
-            if not rejection_df.empty:
-                rejection_counts = rejection_df["断り理由"].value_counts().reset_index()
-                rejection_counts.columns = ["理由", "件数"]
-                chart_rej = alt.Chart(rejection_counts).mark_bar(color="#F58518").encode(
-                    x=alt.X("理由:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
+                st.dataframe(_tanto_summary, use_container_width=True, hide_index=True)
+
+                # 担当者別架電数グラフ
+                _tanto_chart = alt.Chart(_tanto_summary).mark_bar(color="#4C78A8").encode(
+                    x=alt.X("担当名:N", axis=alt.Axis(labelAngle=0, labelFontSize=13)),
+                    y=alt.Y("架電数:Q"),
+                    tooltip=["担当名", "架電数", "アポ数", "アポ率(%)"],
+                ).properties(height=220, title="担当者別 架電数")
+                st.altair_chart(_tanto_chart, use_container_width=True)
+
+    # ── 架電ダッシュボード ─────────────────────────────────────────
+    with dash_call:
+        df_fb = load_feedback()
+
+        if df_fb.empty:
+            st.info("データが溜まったら分析できます。まずコール記録を入力してください。")
+        else:
+            total = len(df_fb)
+            apo_count = (df_fb["アポ獲得"] == "はい").sum()
+            apo_rate = apo_count / total * 100 if total > 0 else 0
+
+            # KPI
+            col_k1, col_k2, col_k3, col_k4 = st.columns(4)
+            col_k1.metric("総架電数", f"{total}件")
+            col_k2.metric("アポ獲得数", f"{apo_count}件")
+            col_k3.metric("アポ獲得率", f"{apo_rate:.1f}%")
+            rank_a = (df_fb["温度感"] == "A").sum()
+            col_k4.metric("見込みランクA", f"{rank_a}件")
+
+            st.divider()
+
+            col_g1, col_g2 = st.columns(2)
+
+            with col_g1:
+                st.markdown("**架電結果の内訳**")
+                result_counts = df_fb["アプローチ結果"].value_counts().reset_index()
+                result_counts.columns = ["結果", "件数"]
+                chart_r = alt.Chart(result_counts).mark_bar(color="#4C78A8").encode(
+                    x=alt.X("結果:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
                     y=alt.Y("件数:Q"),
-                    tooltip=["理由", "件数"],
+                    tooltip=["結果", "件数"],
                 ).properties(height=250)
-                st.altair_chart(chart_rej, use_container_width=True)
-            else:
-                st.caption("断りデータなし")
+                st.altair_chart(chart_r, use_container_width=True)
 
-        st.divider()
+            with col_g2:
+                st.markdown("**断り理由の内訳**")
+                rejection_df = df_fb[df_fb["断り理由"].notna() & (df_fb["断り理由"] != "")]
+                if not rejection_df.empty:
+                    rejection_counts = rejection_df["断り理由"].value_counts().reset_index()
+                    rejection_counts.columns = ["理由", "件数"]
+                    chart_rej = alt.Chart(rejection_counts).mark_bar(color="#F58518").encode(
+                        x=alt.X("理由:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=12)),
+                        y=alt.Y("件数:Q"),
+                        tooltip=["理由", "件数"],
+                    ).properties(height=250)
+                    st.altair_chart(chart_rej, use_container_width=True)
+                else:
+                    st.caption("断りデータなし")
 
-        # ── results.csv との突合分析 ──────────────────────────────────
-        st.markdown("### ランク・シグナル別アポ率")
+            st.divider()
 
-        import re as _re
+            # ── results.csv との突合分析 ──────────────────────────────────
+            st.markdown("### ランク・シグナル別アポ率")
 
-        def _build_signal_analysis(df_feedback: pd.DataFrame) -> dict:
-            """feedback と results.csv を突合してシグナル別アポ率を計算"""
-            if not os.path.exists(RESULTS_FILE):
-                return {}
-            try:
-                df_res = pd.read_csv(RESULTS_FILE, encoding="utf-8-sig")
-            except Exception:
-                return {}
+            import re as _re
 
-            results_by_name = {
-                row["会社名"].strip(): row
-                for _, row in df_res.iterrows()
-                if pd.notna(row.get("会社名"))
-            }
+            def _build_signal_analysis(df_feedback: pd.DataFrame) -> dict:
+                """feedback と results.csv を突合してシグナル別アポ率を計算"""
+                if not os.path.exists(RESULTS_FILE):
+                    return {}
+                try:
+                    df_res = pd.read_csv(RESULTS_FILE, encoding="utf-8-sig")
+                except Exception:
+                    return {}
 
-            rank_stats: dict[str, dict] = {}
-            signal_stats: dict[str, dict] = {}
+                results_by_name = {
+                    row["会社名"].strip(): row
+                    for _, row in df_res.iterrows()
+                    if pd.notna(row.get("会社名"))
+                }
 
-            for _, fb in df_feedback.iterrows():
-                name = str(fb.get("会社名", "")).strip()
-                got_apo = fb.get("アポ獲得") == "はい"
-                result = results_by_name.get(name)
-                if result is None:
-                    continue
+                rank_stats: dict[str, dict] = {}
+                signal_stats: dict[str, dict] = {}
 
-                rank = str(result.get("ランク", "")).strip()
-                if rank:
-                    s = rank_stats.setdefault(rank, {"apo": 0, "total": 0})
-                    s["total"] += 1
-                    if got_apo:
-                        s["apo"] += 1
+                for _, fb in df_feedback.iterrows():
+                    name = str(fb.get("会社名", "")).strip()
+                    got_apo = fb.get("アポ獲得") == "はい"
+                    result = results_by_name.get(name)
+                    if result is None:
+                        continue
 
-                notes = str(result.get("備考", ""))
-                m = _re.search(r"理由: (.+?)(?:\s*\||$)", notes)
-                if m:
-                    for sig in [s.strip() for s in m.group(1).split(",")]:
-                        key = sig[:35]
-                        s = signal_stats.setdefault(key, {"apo": 0, "total": 0})
+                    rank = str(result.get("ランク", "")).strip()
+                    if rank:
+                        s = rank_stats.setdefault(rank, {"apo": 0, "total": 0})
                         s["total"] += 1
                         if got_apo:
                             s["apo"] += 1
 
-            return {"rank_stats": rank_stats, "signal_stats": signal_stats}
+                    notes = str(result.get("備考", ""))
+                    m = _re.search(r"理由: (.+?)(?:\s*\||$)", notes)
+                    if m:
+                        for sig in [s.strip() for s in m.group(1).split(",")]:
+                            key = sig[:35]
+                            s = signal_stats.setdefault(key, {"apo": 0, "total": 0})
+                            s["total"] += 1
+                            if got_apo:
+                                s["apo"] += 1
 
-        analysis = _build_signal_analysis(df_fb)
+                return {"rank_stats": rank_stats, "signal_stats": signal_stats}
 
-        if not analysis:
-            st.caption("results.csv が見つからないか、まだ突合できるデータがありません。")
-        else:
-            rank_stats = analysis.get("rank_stats", {})
-            signal_stats = analysis.get("signal_stats", {})
-            matched = sum(s["total"] for s in rank_stats.values())
-            st.caption(f"results.csv との突合: {matched}/{total}件")
+            analysis = _build_signal_analysis(df_fb)
 
-            # ランク別アポ率
-            if rank_stats:
-                rank_data = {
-                    rank: round(s["apo"] / s["total"] * 100, 1) if s["total"] > 0 else 0
-                    for rank, s in rank_stats.items()
-                }
-                rank_df = pd.DataFrame.from_dict(
-                    rank_data, orient="index", columns=["アポ率(%)"]
-                ).reindex(["A", "B", "C"]).dropna()
-                col_r1, col_r2 = st.columns([1, 2])
-                with col_r1:
-                    st.markdown("**ランク別アポ率**")
-                    for rank in ["A", "B", "C"]:
-                        if rank in rank_stats:
-                            s = rank_stats[rank]
-                            r = s["apo"] / s["total"] * 100 if s["total"] > 0 else 0
-                            st.metric(f"{rank}ランク", f"{r:.1f}%", f"{s['apo']}/{s['total']}件")
-                with col_r2:
-                    if not rank_df.empty:
-                        rank_chart_df = rank_df.reset_index()
-                        rank_chart_df.columns = ["ランク", "アポ率(%)"]
-                        chart_rank = alt.Chart(rank_chart_df).mark_bar(color="#54A24B").encode(
-                            x=alt.X("ランク:N", sort=None, axis=alt.Axis(labelAngle=0, labelFontSize=14)),
-                            y=alt.Y("アポ率(%):Q"),
-                            tooltip=["ランク", "アポ率(%)"],
-                        ).properties(height=200)
-                        st.altair_chart(chart_rank, use_container_width=True)
+            if not analysis:
+                st.caption("results.csv が見つからないか、まだ突合できるデータがありません。")
+            else:
+                rank_stats = analysis.get("rank_stats", {})
+                signal_stats = analysis.get("signal_stats", {})
+                matched = sum(s["total"] for s in rank_stats.values())
+                st.caption(f"results.csv との突合: {matched}/{total}件")
 
-            # シグナル別アポ率
-            if signal_stats:
-                sig_rates = sorted(
-                    [(sig, s["apo"] / s["total"] * 100, s["apo"], s["total"])
-                     for sig, s in signal_stats.items() if s["total"] >= 3],
-                    key=lambda x: -x[1],
+                # ランク別アポ率
+                if rank_stats:
+                    rank_data = {
+                        rank: round(s["apo"] / s["total"] * 100, 1) if s["total"] > 0 else 0
+                        for rank, s in rank_stats.items()
+                    }
+                    rank_df = pd.DataFrame.from_dict(
+                        rank_data, orient="index", columns=["アポ率(%)"]
+                    ).reindex(["A", "B", "C"]).dropna()
+                    col_r1, col_r2 = st.columns([1, 2])
+                    with col_r1:
+                        st.markdown("**ランク別アポ率**")
+                        for rank in ["A", "B", "C"]:
+                            if rank in rank_stats:
+                                s = rank_stats[rank]
+                                r = s["apo"] / s["total"] * 100 if s["total"] > 0 else 0
+                                st.metric(f"{rank}ランク", f"{r:.1f}%", f"{s['apo']}/{s['total']}件")
+                    with col_r2:
+                        if not rank_df.empty:
+                            rank_chart_df = rank_df.reset_index()
+                            rank_chart_df.columns = ["ランク", "アポ率(%)"]
+                            chart_rank = alt.Chart(rank_chart_df).mark_bar(color="#54A24B").encode(
+                                x=alt.X("ランク:N", sort=None, axis=alt.Axis(labelAngle=0, labelFontSize=14)),
+                                y=alt.Y("アポ率(%):Q"),
+                                tooltip=["ランク", "アポ率(%)"],
+                            ).properties(height=200)
+                            st.altair_chart(chart_rank, use_container_width=True)
+
+                # シグナル別アポ率
+                if signal_stats:
+                    sig_rates = sorted(
+                        [(sig, s["apo"] / s["total"] * 100, s["apo"], s["total"])
+                         for sig, s in signal_stats.items() if s["total"] >= 3],
+                        key=lambda x: -x[1],
+                    )
+                    if sig_rates:
+                        st.markdown("**シグナル別アポ率（3件以上）**")
+                        sig_df = pd.DataFrame(sig_rates, columns=["シグナル", "アポ率(%)", "アポ数", "件数"])
+                        sig_df["アポ率(%)"] = sig_df["アポ率(%)"].round(1)
+                        st.dataframe(sig_df, use_container_width=True, hide_index=True)
+
+                        # 低効果シグナルの警告
+                        low = sig_df[sig_df["アポ率(%)"] < 10]
+                        if not low.empty:
+                            st.warning(
+                                f"アポ率10%未満のシグナル: "
+                                + "、".join(f"「{r}」" for r in low["シグナル"].tolist()[:3])
+                                + " → 採点ウェイント削減を検討"
+                            )
+                    else:
+                        st.caption("シグナル分析には各シグナルで3件以上のコール記録が必要です。")
+
+            st.divider()
+
+            # 見込みランクA・Bの企業一覧（次のフォロー候補）
+            st.markdown("**見込みランクA・Bの企業（フォロー候補）**")
+            warm = df_fb[df_fb["温度感"].isin(["A", "B"])].sort_values("温度感")
+            if not warm.empty:
+                st.dataframe(
+                    warm[["記録日", "会社名", "アプローチ結果", "温度感", "断り理由", "反応が良かったポイント", "メモ"]].rename(
+                        columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
                 )
-                if sig_rates:
-                    st.markdown("**シグナル別アポ率（3件以上）**")
-                    sig_df = pd.DataFrame(sig_rates, columns=["シグナル", "アポ率(%)", "アポ数", "件数"])
-                    sig_df["アポ率(%)"] = sig_df["アポ率(%)"].round(1)
-                    st.dataframe(sig_df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("見込みランクA・Bの記録なし")
 
-                    # 低効果シグナルの警告
-                    low = sig_df[sig_df["アポ率(%)"] < 10]
-                    if not low.empty:
-                        st.warning(
-                            f"アポ率10%未満のシグナル: "
-                            + "、".join(f"「{r}」" for r in low["シグナル"].tolist()[:3])
-                            + " → 採点ウェイント削減を検討"
-                        )
-                else:
-                    st.caption("シグナル分析には各シグナルで3件以上のコール記録が必要です。")
+            # アポ獲得企業一覧
+            st.markdown("**アポ獲得企業一覧**")
+            apo_df = df_fb[df_fb["アポ獲得"] == "はい"]
+            if not apo_df.empty:
+                st.dataframe(
+                    apo_df[["記録日", "会社名", "反応が良かったポイント", "メモ"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("アポ獲得記録なし")
 
-        st.divider()
+            # 担当者別 架電分析（担当名データがある場合）
+            if "担当名" in df_fb.columns:
+                _tanto_fb = df_fb[df_fb["担当名"].notna() & (df_fb["担当名"] != "")]
+                if not _tanto_fb.empty:
+                    st.divider()
+                    st.markdown("**担当者別 架電数・アポ率**")
+                    _tanto_fb_grp = _tanto_fb.groupby("担当名").agg(
+                        架電数=("会社名", "count"),
+                        アポ数=("アポ獲得", lambda x: (x == "はい").sum()),
+                    ).reset_index()
+                    _tanto_fb_grp["アポ率(%)"] = (_tanto_fb_grp["アポ数"] / _tanto_fb_grp["架電数"] * 100).round(1)
+                    _tc1, _tc2 = st.columns(2)
+                    with _tc1:
+                        st.dataframe(_tanto_fb_grp, use_container_width=True, hide_index=True)
+                    with _tc2:
+                        _tanto_chart2 = alt.Chart(_tanto_fb_grp).mark_bar(color="#54A24B").encode(
+                            x=alt.X("担当名:N", axis=alt.Axis(labelAngle=0, labelFontSize=13)),
+                            y=alt.Y("アポ率(%):Q"),
+                            tooltip=["担当名", "架電数", "アポ数", "アポ率(%)"],
+                        ).properties(height=200)
+                        st.altair_chart(_tanto_chart2, use_container_width=True)
 
-        # 見込みランクA・Bの企業一覧（次のフォロー候補）
-        st.markdown("**見込みランクA・Bの企業（フォロー候補）**")
-        warm = df_fb[df_fb["温度感"].isin(["A", "B"])].sort_values("温度感")
-        if not warm.empty:
-            st.dataframe(
-                warm[["記録日", "会社名", "アプローチ結果", "温度感", "断り理由", "反応が良かったポイント", "メモ"]].rename(
-                    columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
+    # ── 商談ダッシュボード ─────────────────────────────────────────
+    with dash_meeting:
+        _df_mt_dash2 = load_meetings() if os.path.exists(MEETINGS_FILE) else pd.DataFrame()
+        if _df_mt_dash2.empty:
+            st.info("商談データが溜まったら分析できます。「商談記録」タブから入力してください。")
         else:
-            st.caption("見込みランクA・Bの記録なし")
+            _total_mt2   = len(_df_mt_dash2)
+            _contract_mt = (_df_mt_dash2["契約"] == "はい").sum()
+            _cv_mt       = _contract_mt / _total_mt2 * 100 if _total_mt2 > 0 else 0
+            _pending_mt  = _df_mt_dash2[_df_mt_dash2["商談結果"].isin(["検討中", "次回アポあり", "保留"])].shape[0]
 
-        # アポ獲得企業一覧
-        st.markdown("**アポ獲得企業一覧**")
-        apo_df = df_fb[df_fb["アポ獲得"] == "はい"]
-        if not apo_df.empty:
-            st.dataframe(
-                apo_df[["記録日", "会社名", "反応が良かったポイント", "メモ"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.caption("アポ獲得記録なし")
+            mk1, mk2, mk3, mk4 = st.columns(4)
+            mk1.metric("総商談数",  f"{_total_mt2}件")
+            mk2.metric("契約件数",  f"{_contract_mt}件")
+            mk3.metric("成約率",    f"{_cv_mt:.1f}%")
+            mk4.metric("進行中",    f"{_pending_mt}件")
+
+            st.divider()
+            _mdc1, _mdc2 = st.columns(2)
+            with _mdc1:
+                st.markdown("**フェーズ別件数**")
+                _ph_df = _df_mt_dash2["フェーズ"].value_counts().reset_index()
+                _ph_df.columns = ["フェーズ", "件数"]
+                _chart_ph = alt.Chart(_ph_df).mark_bar(color="#4C78A8").encode(
+                    x=alt.X("フェーズ:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    y=alt.Y("件数:Q"),
+                    tooltip=["フェーズ", "件数"],
+                ).properties(height=250)
+                st.altair_chart(_chart_ph, use_container_width=True)
+            with _mdc2:
+                st.markdown("**商談結果の内訳**")
+                _mr_df = _df_mt_dash2["商談結果"].value_counts().reset_index()
+                _mr_df.columns = ["商談結果", "件数"]
+                _chart_mr2 = alt.Chart(_mr_df).mark_bar(color="#72B7B2").encode(
+                    x=alt.X("商談結果:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    y=alt.Y("件数:Q"),
+                    tooltip=["商談結果", "件数"],
+                ).properties(height=250)
+                st.altair_chart(_chart_mr2, use_container_width=True)
+
+            # 担当者別成約率
+            if "担当名" in _df_mt_dash2.columns:
+                _mt_tanto2 = _df_mt_dash2[_df_mt_dash2["担当名"].notna() & (_df_mt_dash2["担当名"] != "")]
+                if not _mt_tanto2.empty:
+                    st.divider()
+                    st.markdown("**担当者別 商談数・成約率**")
+                    _mt_grp = _mt_tanto2.groupby("担当名").agg(
+                        商談数=("会社名", "count"),
+                        契約数=("契約", lambda x: (x == "はい").sum()),
+                    ).reset_index()
+                    _mt_grp["成約率(%)"] = (_mt_grp["契約数"] / _mt_grp["商談数"] * 100).round(1)
+                    st.dataframe(_mt_grp, use_container_width=True, hide_index=True)
+
+            # 次のアクションが必要な案件
+            st.divider()
+            st.markdown("**次のアクションが必要な案件**")
+            _action_needed = _df_mt_dash2[
+                _df_mt_dash2["商談結果"].isin(["検討中", "次回アポあり", "保留"]) &
+                _df_mt_dash2["次のアクション"].notna() &
+                (_df_mt_dash2["次のアクション"] != "")
+            ].sort_values("商談日", ascending=False)
+            if not _action_needed.empty:
+                _show_mt_cols = [c for c in ["商談日", "会社名", "担当者名", "担当名", "フェーズ", "商談結果", "次のアクション", "規模感・金額"] if c in _action_needed.columns]
+                st.dataframe(_action_needed[_show_mt_cols], use_container_width=True, hide_index=True)
+            else:
+                st.caption("対象なし")
 
 
 # ──────────────────────────────
@@ -1090,23 +1247,284 @@ with tab_listup:
 
 
 # ──────────────────────────────
-# TAB6: 商談記録
+# 架電先リスト ユーティリティ
 # ──────────────────────────────
 
+_CALL_LIST_COLS = ["会社名", "電話番号", "代表者", "担当名", "リスト名", "HPリンク", "説明"]
+
+
+def load_call_list() -> pd.DataFrame:
+    """架電先リストをCSVから読み込む"""
+    if os.path.exists(CALL_LIST_FILE):
+        try:
+            df = pd.read_csv(CALL_LIST_FILE, encoding="utf-8-sig", dtype=str).fillna("")
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame(columns=_CALL_LIST_COLS)
+
+
 def load_meetings() -> pd.DataFrame:
+    """商談記録をCSVから読み込む（後方互換: 担当名列がない場合は空列追加）"""
     if os.path.exists(MEETINGS_FILE):
         try:
             df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig")
             df["商談日"] = pd.to_datetime(df["商談日"], errors="coerce")
             df["記録日"] = pd.to_datetime(df["記録日"], errors="coerce")
+            if "担当名" not in df.columns:
+                df["担当名"] = ""
             return df
         except Exception:
             pass
     return pd.DataFrame(columns=[
         "記録日", "商談日", "会社名", "担当者名", "フェーズ",
-        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ"
+        "商談結果", "契約", "次のアクション", "規模感・金額", "メモ", "担当名"
     ])
 
+
+# ──────────────────────────────
+# TAB: 架電先リスト
+# ──────────────────────────────
+with tab_calllist:
+    st.subheader("架電先リスト")
+    st.caption("会社情報（電話番号・代表者）を見ながら、このツールだけで架電記録を完結できます。")
+
+    cl_view, cl_import, cl_inline = st.tabs(["📋 リスト表示", "📥 インポート", "📞 インライン架電記録"])
+
+    # ── リスト表示 ─────────────────────────────────────────────────
+    with cl_view:
+        df_clist = load_call_list()
+        df_fb_join = load_feedback()
+
+        if df_clist.empty:
+            st.info("架電先リストがありません。「インポート」タブからリストを登録してください。")
+        else:
+            # フィルター
+            clf1, clf2 = st.columns(2)
+            with clf1:
+                cl_persons = ["全員"] + sorted(df_clist["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist())
+                cl_filt_person = st.selectbox("担当名で絞り込み", cl_persons, key="cl_filt_person")
+            with clf2:
+                cl_filt_search = st.text_input("会社名で検索", key="cl_filt_search")
+
+            filtered_cl = df_clist.copy()
+            if cl_filt_person != "全員":
+                filtered_cl = filtered_cl[filtered_cl["担当名"] == cl_filt_person]
+            if cl_filt_search:
+                filtered_cl = filtered_cl[filtered_cl["会社名"].str.contains(cl_filt_search, na=False)]
+
+            # 最新架電結果を結合
+            if not df_fb_join.empty:
+                latest_fb = (
+                    df_fb_join.sort_values("記録日", ascending=False)
+                    .drop_duplicates(subset="会社名", keep="first")
+                    [["会社名", "アプローチ結果", "温度感", "記録日"]]
+                    .rename(columns={"アプローチ結果": "最終架電結果", "温度感": "見込みランク", "記録日": "最終架電日"})
+                )
+                display_cl = filtered_cl.merge(latest_fb, on="会社名", how="left")
+            else:
+                display_cl = filtered_cl.copy()
+
+            uncalled = (
+                display_cl.get("最終架電結果", pd.Series(dtype=str))
+                .isna()
+                .sum()
+                if "最終架電結果" in display_cl.columns
+                else len(display_cl)
+            )
+            st.caption(f"表示: {len(display_cl)}件 / 未架電: {uncalled}件")
+
+            show_cols = [c for c in ["会社名", "電話番号", "代表者", "担当名", "リスト名", "最終架電結果", "見込みランク", "最終架電日"] if c in display_cl.columns]
+            st.dataframe(display_cl[show_cols], use_container_width=True, hide_index=True)
+
+            csv_cl = display_cl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button("📥 CSVダウンロード", data=csv_cl, file_name="call_list_export.csv", mime="text/csv", key="cl_dl")
+
+    # ── インポート ─────────────────────────────────────────────────
+    with cl_import:
+        cl_saved = _load_import_settings("calllist")
+        cl_src_mode = st.radio(
+            "ファイルの指定方法",
+            ["📂 パスを直接入力", "⬆️ アップロード", "🔗 Googleスプレッドシート"],
+            horizontal=True,
+            key="cl_src_mode",
+        )
+
+        cl_df_raw: pd.DataFrame | None = None
+        cl_filepath_val = ""
+
+        if cl_src_mode.startswith("📂"):
+            cl_filepath_val = st.text_input(
+                "ファイルパス（CSV または .xlsx）",
+                value=cl_saved.get("filepath", ""),
+                placeholder=r"C:\Users\user\Desktop\アプローチリスト.xlsx",
+                key="cl_filepath",
+            )
+            if cl_filepath_val and os.path.exists(cl_filepath_val):
+                cl_df_raw = _read_file_to_df(cl_filepath_val)
+                if cl_df_raw is None:
+                    st.error("ファイルを読み込めませんでした。")
+            elif cl_filepath_val:
+                st.warning("ファイルが見つかりません。パスを確認してください。")
+        elif cl_src_mode.startswith("⬆️"):
+            cl_uploaded = st.file_uploader("CSV / Excel を選択", type=["csv", "xlsx", "xls"], key="cl_upload")
+            if cl_uploaded:
+                ext = os.path.splitext(cl_uploaded.name)[1].lower()
+                if ext in (".xlsx", ".xls"):
+                    cl_df_raw = pd.read_excel(cl_uploaded, dtype=str).fillna("")
+                else:
+                    raw_cl = cl_uploaded.read()
+                    for enc in ("utf-8-sig", "shift-jis", "cp932", "utf-8"):
+                        try:
+                            cl_df_raw = pd.read_csv(_io_mod.StringIO(raw_cl.decode(enc)), dtype=str).fillna("")
+                            break
+                        except Exception:
+                            pass
+                cl_filepath_val = cl_uploaded.name
+        else:
+            cl_df_raw = _render_gsheets_loader("calllist_gs", cl_saved)
+
+        if cl_df_raw is not None:
+            st.markdown(f"**読み込み: {len(cl_df_raw)}行 / {len(cl_df_raw.columns)}列**")
+            st.dataframe(cl_df_raw.head(3), use_container_width=True, hide_index=True)
+
+            st.markdown("### 列マッピング")
+            cl_all_cols = ["（使わない）"] + cl_df_raw.columns.tolist()
+            cl_map_saved = cl_saved.get("mapping", {})
+
+            def cl_pick(label, keywords):
+                saved_val = cl_map_saved.get(label)
+                if saved_val and saved_val in cl_all_cols:
+                    default = saved_val
+                else:
+                    default = next((col for kw in keywords for col in cl_df_raw.columns if kw in col), "（使わない）")
+                return st.selectbox(label, cl_all_cols, index=cl_all_cols.index(default), key=f"clmap_{label}")
+
+            clc1, clc2 = st.columns(2)
+            with clc1:
+                cl_c_company  = cl_pick("会社名",   ["会社名"])
+                cl_c_phone    = cl_pick("電話番号", ["電話番号", "電話", "TEL", "tel"])
+                cl_c_daihyo   = cl_pick("代表者",   ["代表者", "代表", "社長"])
+                cl_c_tanto    = cl_pick("担当名",   ["担当名", "担当者"])
+            with clc2:
+                cl_c_listname = cl_pick("リスト名", ["リスト名", "リスト"])
+                cl_c_hp       = cl_pick("HPリンク", ["HP", "URL", "url", "ホームページ"])
+                cl_c_desc     = cl_pick("説明",     ["説明", "備考"])
+
+            cl_overwrite = st.radio("インポートモード", ["追加（既存データに追加）", "上書き（全て置き換え）"], horizontal=True, key="cl_import_mode")
+
+            if st.button("✅ 架電先リストに取り込む", type="primary", key="cl_import_btn"):
+                import csv as _csv_cl
+                os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+                def _cl_v(row, col):
+                    return row.get(col, "").strip() if col != "（使わない）" else ""
+
+                new_cl_rows = []
+                for _, row in cl_df_raw.iterrows():
+                    company = _cl_v(row, cl_c_company)
+                    if not company:
+                        continue
+                    new_cl_rows.append({
+                        "会社名":   company,
+                        "電話番号": _cl_v(row, cl_c_phone),
+                        "代表者":   _cl_v(row, cl_c_daihyo),
+                        "担当名":   _cl_v(row, cl_c_tanto),
+                        "リスト名": _cl_v(row, cl_c_listname),
+                        "HPリンク": _cl_v(row, cl_c_hp),
+                        "説明":     _cl_v(row, cl_c_desc),
+                    })
+
+                new_cl_df = pd.DataFrame(new_cl_rows)
+
+                if cl_overwrite.startswith("追加"):
+                    existing_cl = load_call_list()
+                    if not existing_cl.empty:
+                        existing_names = set(existing_cl["会社名"].tolist())
+                        new_cl_df = new_cl_df[~new_cl_df["会社名"].isin(existing_names)]
+                    mode = "a"
+                    header = not os.path.exists(CALL_LIST_FILE) or os.path.getsize(CALL_LIST_FILE) == 0
+                else:
+                    mode = "w"
+                    header = True
+
+                new_cl_df.to_csv(CALL_LIST_FILE, mode=mode, index=False, encoding="utf-8-sig", header=header)
+                _save_import_settings("calllist", {
+                    "filepath": cl_filepath_val if cl_src_mode.startswith("📂") else "",
+                    "mapping": {
+                        "会社名": cl_c_company, "電話番号": cl_c_phone, "代表者": cl_c_daihyo,
+                        "担当名": cl_c_tanto, "リスト名": cl_c_listname, "HPリンク": cl_c_hp, "説明": cl_c_desc,
+                    },
+                })
+                st.success(f"✅ {len(new_cl_df)}件を取り込みました。")
+                st.rerun()
+
+    # ── インライン架電記録 ─────────────────────────────────────────
+    with cl_inline:
+        df_clist_inline = load_call_list()
+        if df_clist_inline.empty:
+            st.info("架電先リストが空です。「インポート」タブからリストを読み込んでください。")
+        else:
+            st.caption("リストから会社を選んで架電結果をすぐに記録できます。別のシートに切り替える必要はありません。")
+
+            # フィルター（担当名で絞り込んでから会社を選択）
+            cl_inline_persons = ["全員"] + sorted(df_clist_inline["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist())
+            il_person_filter = st.selectbox("担当名で絞り込む", cl_inline_persons, key="il_person_filter")
+
+            if il_person_filter != "全員":
+                il_companies = df_clist_inline[df_clist_inline["担当名"] == il_person_filter]["会社名"].tolist()
+            else:
+                il_companies = df_clist_inline["会社名"].tolist()
+
+            il_selected = st.selectbox("架電する会社を選択", il_companies, key="il_company_select")
+
+            if il_selected:
+                il_row = df_clist_inline[df_clist_inline["会社名"] == il_selected].iloc[0]
+                # 会社情報パネル
+                st.info(
+                    f"📞 **電話番号**: {il_row.get('電話番号', '') or '―'}　　"
+                    f"👤 **代表者**: {il_row.get('代表者', '') or '―'}　　"
+                    f"🏢 **担当**: {il_row.get('担当名', '') or '―'}"
+                )
+                if il_row.get("HPリンク"):
+                    st.markdown(f"🌐 HP: [{il_row['HPリンク']}]({il_row['HPリンク']})")
+
+                il_col1, il_col2 = st.columns([2, 1])
+                with il_col1:
+                    il_result = st.selectbox(
+                        "架電結果",
+                        ["社長NG", "受付NG", "取材NG", "担当NG", "社長アポ", "担当アポ", "資料送付", "追客", "不通リスト", "追わない", "日程調整中", "触るな危険"],
+                        key="il_result",
+                    )
+                    il_rank = st.selectbox("見込みランク", ["なし", "C", "B", "A"], key="il_rank")
+                    # 担当名: リストの担当名をデフォルトに
+                    il_tantosha = st.text_input(
+                        "担当名（架電者）",
+                        value=il_row.get("担当名", ""),
+                        placeholder="野村 / 橘爪",
+                        key="il_tantosha",
+                    )
+                with il_col2:
+                    il_good = st.text_input("反応が良かったポイント", key="il_good")
+                    il_memo = st.text_area("メモ", height=120, key="il_memo")
+
+                if st.button("✅ 架電を記録する", type="primary", key="il_submit"):
+                    record_feedback(
+                        company_name=il_selected,
+                        approach_result=il_result,
+                        got_appointment=il_result in ("社長アポ", "担当アポ"),
+                        temperature=il_rank,
+                        good_points=il_good,
+                        memo=il_memo,
+                        tantosha=il_tantosha,
+                    )
+                    st.success(f"記録しました: **{il_selected}** — {il_result}")
+                    st.rerun()
+
+
+# ──────────────────────────────
+# TAB6: 商談記録
+# ──────────────────────────────
 
 _MEETING_FIELDS_FILE = os.path.join(OUTPUT_DIR, "meeting_fields.json")
 
@@ -1172,7 +1590,7 @@ with tab_meeting:
             else:
                 m_company = st.text_input("会社名", placeholder="株式会社〇〇", key="m_company_text")
 
-            m_contact = st.text_input("担当者名", placeholder="山田 太郎（役職）")
+            m_contact = st.text_input("担当者名（相手先）", placeholder="山田 太郎（役職）")
 
             m_phase = st.selectbox(
                 "フェーズ",
@@ -1189,6 +1607,13 @@ with tab_meeting:
             m_contracted = m_result == "契約"
             if m_contracted:
                 st.success("🎉 契約！")
+            # パスアポ対応者（架電担当）をデフォルト候補として表示
+            _clist_m = load_call_list()
+            _m_persons = sorted(_clist_m["担当名"].dropna().replace("", pd.NA).dropna().unique().tolist()) if not _clist_m.empty else []
+            if _m_persons:
+                m_tantosha = st.selectbox("担当名（パスアポ対応者）", [""] + _m_persons, key="m_tantosha_sel")
+            else:
+                m_tantosha = st.text_input("担当名（パスアポ対応者）", placeholder="野村 / 橘爪", key="m_tantosha_text")
             m_deal_size = st.text_input("規模感・金額", placeholder="月額 5万円 / 50名")
             m_next_action = st.text_input("次のアクション", placeholder="来週再提案 / 稟議待ち")
 
@@ -1225,6 +1650,7 @@ with tab_meeting:
                 next_action=m_next_action,
                 deal_size=m_deal_size,
                 memo=m_memo,
+                tantosha=m_tantosha,
                 extra_fields=m_custom_values if m_custom_values else None,
             )
             st.success(f"記録しました: **{m_company}** — {m_phase} / {m_result}")
