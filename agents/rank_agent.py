@@ -127,7 +127,7 @@ def pre_screen(search_result: dict) -> tuple[bool, str]:
         return False, "大手グループ企業"
 
     # ② 従業員数（スニペットに明記されている場合）
-    emp_m = re.search(r"従業員[数人]?\s*[：:約]?\s*(\d+)\s*名?", text)
+    emp_m = re.search(r"(?:従業員[数人]?|社員[数人]?|スタッフ[数人]?)\s*[：:約\s]*(\d+)\s*名?", text)
     if emp_m:
         count = int(emp_m.group(1))
         if count > 200:
@@ -291,7 +291,23 @@ def evaluate_rank(
         if ng_kw in company_context:
             return {"rank": "NG", "score": 0, "reasons": [], "ng_reason": f"NG業種: {ng_kw}"}
 
-    emp_match = re.search(r"従業員[数人]?\s*[：:\s]*(\d+)\s*名?", full_text)
+    # scraper_agentが抽出した従業員数を直接チェック（最優先）
+    _emp_raw = company_info.get("employee_count", "")
+    if _emp_raw:
+        try:
+            _emp_n = int(re.sub(r"\D", "", str(_emp_raw)))
+            if _emp_n > 200:
+                return {"rank": "NG", "score": 0, "reasons": [], "ng_reason": f"従業員{_emp_n}名（200名超）"}
+            if _emp_n < 10:
+                return {"rank": "NG", "score": 0, "reasons": [], "ng_reason": f"従業員{_emp_n}名（下限未満）"}
+        except ValueError:
+            pass
+
+    # full_textからも広いパターンで検索（社員数・スタッフ数も対象）
+    emp_match = re.search(
+        r"(?:従業員[数人]?|社員[数人]?|スタッフ[数人]?)\s*[：:\s]*(\d+)\s*名?",
+        full_text
+    )
     if emp_match:
         count = int(emp_match.group(1))
         if count > 200:

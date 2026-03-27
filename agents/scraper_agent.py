@@ -627,12 +627,15 @@ def validate_company_info(info: dict) -> dict:
     if name and re.search(r"株式会社|合同会社|有限会社|一般社団法人", name) and len(name) <= 60:
         confidence += 1
 
-    # 従業員数: 数値かつ1〜999の範囲
+    # 従業員数: 数値かつ1〜200の範囲（200超はrank_agentでNG判定するためクリアせず保持）
     emp = info.get("employee_count", "")
     if emp:
         digits_emp = re.sub(r"\D", "", str(emp))
-        if digits_emp and 1 <= int(digits_emp) <= 999:
+        if digits_emp and 1 <= int(digits_emp) <= 200:
             confidence += 1
+        elif digits_emp and int(digits_emp) > 200:
+            # 200超はNGだが値は保持してrank_agentに判定させる
+            logger.debug(f"従業員数200超（rank_agentでNG判定）: {emp}")
         else:
             logger.debug(f"従業員数範囲外→クリア: {emp}")
             info["employee_count"] = ""
