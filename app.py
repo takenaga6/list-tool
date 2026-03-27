@@ -1428,6 +1428,57 @@ with tab_listup:
     st.subheader("企業リストアップを実行")
     st.caption("Google検索 → スクレイピング → ランク判定 → HubSpot登録 を自動実行します。実行中はこのタブを開いたままにしてください。")
 
+    # ── フィードバック学習 ──────────────────────────────────────────
+    with st.expander("🧠 精度学習（架電・商談フィードバックを反映）", expanded=False):
+        st.caption("架電結果・商談結果を分析してシグナルウェイトを自動更新します。リストアップ開始時にも自動実行されます。")
+        _fl_col1, _fl_col2 = st.columns([1, 3])
+        with _fl_col1:
+            _fl_btn = st.button("学習を実行", key="run_feedback_learning", type="primary")
+        with _fl_col2:
+            # 前回の学習日時を表示
+            _wf_path = os.path.join(_LIST_TOOL_DIR, "output", "signal_weights.json")
+            if os.path.exists(_wf_path):
+                try:
+                    import json as _wj
+                    with open(_wf_path, encoding="utf-8") as _wf:
+                        _wd = _wj.load(_wf)
+                    st.caption(f"前回学習: {_wd.get('_updated', '未実行')}")
+                except Exception:
+                    pass
+
+        if _fl_btn:
+            with st.spinner("フィードバック学習中..."):
+                try:
+                    from agents.feedback_learner import run_learning as _run_fl
+                    _fl_result = _run_fl()
+                    _fl_stats = _fl_result.get("stats", {})
+                    _fl_updates = _fl_result.get("signal_updates", {})
+                    st.success(
+                        f"学習完了 — 成功{_fl_stats.get('success',0)}社 / 失敗{_fl_stats.get('failure',0)}社 / "
+                        f"成約{_fl_stats.get('contract',0)}社 → {len(_fl_updates)}シグナル更新"
+                    )
+                    if _fl_updates:
+                        import pandas as _fl_pd
+                        _fl_rows = []
+                        for sig, upd in _fl_updates.items():
+                            direction = "↑" if upd["new"] > upd["old"] else ("↓" if upd["new"] < upd["old"] else "→")
+                            _fl_rows.append({
+                                "シグナル": sig,
+                                "変化": direction,
+                                "旧ウェイト": upd["old"],
+                                "新ウェイト": upd["new"],
+                                "アポ率": f"{upd['apo_rate']:.0%}",
+                                "サンプル数": upd["samples"],
+                            })
+                        st.dataframe(_fl_pd.DataFrame(_fl_rows), use_container_width=True, hide_index=True)
+                    if _fl_stats.get("unmatched", 0) > 0:
+                        st.caption(f"※ {_fl_stats['unmatched']}社はresults.csvと突合できませんでした（リストアップ前の手動インポート分など）")
+                    # rank_agentのウェイトキャッシュをリロード
+                    import agents.rank_agent as _ra_reload
+                    _ra_reload._W = _ra_reload._load_weights()
+                except Exception as _fle:
+                    st.error(f"学習エラー: {_fle}")
+
     # ── 担当者設定（複数人同時実行時のキーワード分散）────────────────
     _lu_workers = _load_listup_workers()
     _lu_worker_names = sorted(_lu_workers.keys())

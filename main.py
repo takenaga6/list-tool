@@ -1606,6 +1606,18 @@ def run_batch(
         tbs   = TIME_PERIOD_TBS.get(label, "")
         periods.append((label, tbs))
 
+    # フィードバック学習を自動実行（リストアップ開始前にウェイトを最新化）
+    try:
+        from agents.feedback_learner import run_learning
+        _fl = run_learning()
+        if _fl.get("signal_updates"):
+            print(f"[INFO] フィードバック学習完了: {len(_fl['signal_updates'])}シグナル更新")
+        # rank_agentのウェイトキャッシュをリロード
+        import agents.rank_agent as _ra
+        _ra._W = _ra._load_weights()
+    except Exception as _fle:
+        logger.warning(f"フィードバック学習スキップ: {_fle}")
+
     list_urls: list | None = None
     if auto_mode:
         # 複数人同時使用時の分散: LISTUP_WORKER_OFFSETで各ワーカーの開始位置をずらす
