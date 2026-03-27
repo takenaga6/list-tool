@@ -1532,7 +1532,7 @@ with tab_calllist:
                     _lr = _req2.get(
                         "https://api.hubapi.com/crm/v3/lists/",
                         headers=_hs_h2,
-                        params={"objectTypeId": "0-2", "limit": 200},
+                        params={"limit": 200},
                         timeout=15,
                     )
                     if _lr.ok:
@@ -1551,7 +1551,7 @@ with tab_calllist:
                             st.success(f"リスト {len(_parsed)}件 取得しました")
                             st.rerun()
                         else:
-                            st.warning(f"リスト0件。キー: {list(_resp_json.keys())} / サンプル: {str(_raw_lists[:1])[:300]}")
+                            st.warning(f"リスト0件。キー: {list(_resp_json.keys())} / total: {_resp_json.get('total', 'なし')} / hasMore: {_resp_json.get('hasMore', 'なし')}")
                     else:
                         st.error(f"リスト取得エラー: {_lr.status_code} / {_lr.text[:200]}")
                 except Exception as _le:
