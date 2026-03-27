@@ -34,10 +34,15 @@ st.markdown("""
 html, body, [data-testid="stAppViewContainer"] {
     background-color: #ffffff !important;
     font-family: 'Inter', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+    color: #111827 !important;
 }
 [data-testid="stSidebar"] { background-color: #f9fafb !important; }
 [data-testid="stHeader"] { background-color: #ffffff !important; border-bottom: 1px solid #e5e7eb; }
-[data-testid="block-container"] { padding-top: 1.5rem !important; padding-bottom: 2rem !important; }
+[data-testid="block-container"] { padding-top: 0.75rem !important; padding-bottom: 1rem !important; }
+/* ── セクション間余白削減 ── */
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] { gap: 0.5rem !important; }
+div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
+.element-container { margin-bottom: 0.25rem !important; }
 
 /* ── ヘッダーロゴエリア ── */
 .app-header {
@@ -134,7 +139,6 @@ html, body, [data-testid="stAppViewContainer"] {
 
 /* ── 入力フォーム ── */
 [data-testid="stTextInput"] input,
-[data-testid="stSelectbox"] div[data-baseweb="select"],
 [data-testid="stNumberInput"] input,
 [data-testid="stTextArea"] textarea {
     border: 1px solid #d1d5db !important;
@@ -149,9 +153,41 @@ html, body, [data-testid="stAppViewContainer"] {
     box-shadow: 0 0 0 3px rgba(64,182,128,0.1) !important;
 }
 
-/* ── セレクトボックス ── */
-[data-baseweb="select"] {
-    background: #ffffff !important;
+/* ── セレクトボックス（黒背景を白に強制上書き）── */
+[data-baseweb="select"],
+[data-baseweb="select"] > div,
+[data-testid="stSelectbox"] [data-baseweb="select"],
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 6px !important;
+    font-size: 0.875rem !important;
+}
+/* ドロップダウンリスト本体 */
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] ul {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 6px !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+}
+[data-baseweb="popover"] li,
+[data-baseweb="menu-item"] {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    font-size: 0.875rem !important;
+}
+[data-baseweb="menu-item"]:hover,
+[data-baseweb="popover"] li:hover {
+    background-color: #f0fdf4 !important;
+    color: #111827 !important;
+}
+/* 選択済みの値テキスト */
+[data-baseweb="select"] span,
+[data-baseweb="select"] [data-testid="stMarkdownContainer"] {
+    color: #111827 !important;
 }
 
 /* ── data_editor（テーブル） ── */
@@ -1841,6 +1877,43 @@ with tab_calllist:
             st.markdown("### 🔗 HubSpotから読み込む（推奨）")
             st.caption("リストアップで登録した企業を自動取得します。新規登録分も随時反映できます。")
 
+            # ── HubSpotリスト一覧を取得する関数 ──────────────────────
+            def _fetch_hs_lists():
+                import requests as _req2
+                _hs_h2 = {"Authorization": f"Bearer {HUBSPOT_TOKEN}", "Content-Type": "application/json"}
+                _lr = _req2.post(
+                    "https://api.hubapi.com/crm/v3/lists/search",
+                    headers=_hs_h2,
+                    json={
+                        "objectTypeId": "0-2",
+                        "processingTypes": ["DYNAMIC", "MANUAL", "SNAPSHOT"],
+                        "count": 200,
+                        "offset": 0,
+                    },
+                    timeout=15,
+                )
+                if not _lr.ok:
+                    return None, f"HTTP {_lr.status_code}: {_lr.text[:200]}"
+                _resp_json = _lr.json()
+                _raw_lists = _resp_json.get("lists") or _resp_json.get("results", [])
+                _parsed = []
+                for l in _raw_lists:
+                    _lid = str(l.get("listId") or l.get("hs_list_id") or l.get("id") or "")
+                    _lname = l.get("name") or l.get("listName") or ""
+                    if _lname and _lid:
+                        _parsed.append({"listId": _lid, "name": _lname})
+                return _parsed, None
+
+            # ── 初回ロード時に自動取得 ────────────────────────────────
+            if "hs_lists_cache" not in st.session_state:
+                with st.spinner("HubSpotリスト一覧を取得中..."):
+                    _auto_lists, _auto_err = _fetch_hs_lists()
+                if _auto_err:
+                    st.warning(f"リスト自動取得に失敗しました: {_auto_err}")
+                    st.session_state["hs_lists_cache"] = []
+                else:
+                    st.session_state["hs_lists_cache"] = _auto_lists or []
+
             # ── リスト選択 ──────────────────────────────────────────
             hs_list_col1, hs_list_col2 = st.columns([3, 1])
             with hs_list_col1:
@@ -1854,43 +1927,17 @@ with tab_calllist:
                 )
             with hs_list_col2:
                 st.markdown("　")
-                _load_lists_btn = st.button("🔄 リスト一覧を取得", key="hs_load_lists", use_container_width=True)
+                _load_lists_btn = st.button("🔄 更新", key="hs_load_lists", use_container_width=True)
 
             if _load_lists_btn:
-                import requests as _req2
-                _hs_h2 = {"Authorization": f"Bearer {HUBSPOT_TOKEN}", "Content-Type": "application/json"}
-                try:
-                    # searchエンドポイントで会社リスト（セグメント）を取得
-                    _lr = _req2.post(
-                        "https://api.hubapi.com/crm/v3/lists/search",
-                        headers=_hs_h2,
-                        json={
-                            "objectTypeId": "0-2",
-                            "processingTypes": ["DYNAMIC", "MANUAL", "SNAPSHOT"],
-                            "count": 200,
-                            "offset": 0,
-                        },
-                        timeout=15,
-                    )
-                    if _lr.ok:
-                        _resp_json = _lr.json()
-                        _raw_lists = _resp_json.get("lists") or _resp_json.get("results", [])
-                        _parsed = []
-                        for l in _raw_lists:
-                            _lid = str(l.get("listId") or l.get("hs_list_id") or l.get("id") or "")
-                            _lname = l.get("name") or l.get("listName") or ""
-                            if _lname and _lid:
-                                _parsed.append({"listId": _lid, "name": _lname})
-                        st.session_state["hs_lists_cache"] = _parsed
-                        if _parsed:
-                            st.success(f"リスト {len(_parsed)}件 取得しました")
-                            st.rerun()
-                        else:
-                            st.warning(f"リスト0件。キー: {list(_resp_json.keys())} / raw件数: {len(_raw_lists)} / レスポンス先頭: {_lr.text[:300]}")
-                    else:
-                        st.error(f"リスト取得エラー: {_lr.status_code} / {_lr.text[:300]}")
-                except Exception as _le:
-                    st.error(f"リスト取得例外: {_le}")
+                with st.spinner("取得中..."):
+                    _manual_lists, _manual_err = _fetch_hs_lists()
+                if _manual_err:
+                    st.error(f"リスト取得エラー: {_manual_err}")
+                elif _manual_lists is not None:
+                    st.session_state["hs_lists_cache"] = _manual_lists
+                    st.success(f"リスト {len(_manual_lists)}件 取得しました")
+                    st.rerun()
 
             hs_col1, hs_col2 = st.columns([2, 1])
             with hs_col1:
