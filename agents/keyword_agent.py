@@ -245,7 +245,7 @@ def record_rank_result(query: str, rank: str):
     save_stats(stats)
 
 
-def get_sorted_queries(custom_queries: list[str] = None) -> list[str]:
+def get_sorted_queries(custom_queries: list[str] = None, worker_offset: int = 0) -> list[str]:
     """
     A/Bランク発見率が高い順に並び替えたクエリリストを返す。
 
@@ -255,7 +255,14 @@ def get_sorted_queries(custom_queries: list[str] = None) -> list[str]:
       グループ2: AB率実績あり（高い順）
       グループ3: 未実績クエリ（生成順を維持）
       グループ4: NG率が高い低品質クエリ（末尾）
+
+    worker_offset:
+      複数人が同時に使う場合、各グループ内の順番をワーカーごとにシャッフルする。
+      同じ品質分布を保ちつつ、検索クエリの重複を避けられる。
+      0 = シャッフルなし（デフォルト）
     """
+    import random as _random
+
     all_queries = generate_all_queries()
 
     if custom_queries:
@@ -301,7 +308,22 @@ def get_sorted_queries(custom_queries: list[str] = None) -> list[str]:
 
         return (3, -avg_hits, 0, 0)  # ヒットのみ
 
-    return sorted(all_queries, key=sort_key)
+    sorted_queries = sorted(all_queries, key=sort_key)
+
+    # worker_offsetが指定されている場合、各優先度グループ内をシャッフル
+    # → 品質分布は保ちつつ、複数ワーカーが同じクエリに集中するのを防ぐ
+    if worker_offset != 0:
+        from itertools import groupby
+        result = []
+        # sort_keyの第1要素（グループ番号）でグループ化
+        for _group_id, group_items in groupby(sorted_queries, key=lambda q: sort_key(q)[0]):
+            group = list(group_items)
+            rng = _random.Random(worker_offset + hash(str(_group_id)))
+            rng.shuffle(group)
+            result.extend(group)
+        return result
+
+    return sorted_queries
 
 
 def show_top_queries(n: int = 20):

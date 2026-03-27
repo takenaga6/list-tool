@@ -1,11 +1,13 @@
 """
 検索エージェント
-DuckDuckGoで検索し、媒体名クエリの場合は媒体サイトのURLのみに絞り込む
+Google Custom Search API（優先）またはDuckDuckGoで検索する。
+媒体ドメインのURLは is_media_page=True として通し、企業特集記事から企業HPを抽出する。
 """
 
 import time
 import random
 import logging
+import requests
 from urllib.parse import urlparse
 from ddgs import DDGS
 from config import MEDIA_NAME_TO_DOMAIN, load_exclude_list_csv
@@ -180,22 +182,63 @@ def _record_rejected_url(url: str, title: str, snippet: str, query: str, reason:
         pass
 
 
-def search_google(query: str, tbs: str, num: int = 10) -> list[dict]:
+def _fetch_hits_google_cse(query: str, tbs: str, num: int) -> list[dict]:
     """
-    DuckDuckGoで検索し結果を返す。
-
-    媒体名クエリ（例: "KENJA GLOBAL 株式会社"）の場合:
-      - DuckDuckGoは媒体に掲載された企業のページを返す
-      - 媒体ドメイン自体・SNS・ECを除外し、企業ページとして処理
-      - rank_agentがクエリ内の媒体名を検出して+2ボーナスを付与
-
-    通常クエリの場合:
-      - 媒体・SNS・ECを除いた企業URLを返す
+    Google Custom Search APIでヒットを取得する。
+    APIキー未設定またはエラー時は空リストを返す。
     """
-    results = []
+    from config import GOOGLE_CSE_API_KEY, GOOGLE_CSE_CX
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_CX:
+        return []
+    # tbs → dateRestrict パラメータ変換
+    date_restrict_map = {
+        "qdr:w":  "d7",
+        "qdr:w2": "d14",
+        "qdr:m":  "m1",
+        "qdr:m2": "m2",
+        "qdr:m3": "m3",
+        "qdr:m6": "m6",
+        "qdr:m9": "m9",
+        "qdr:y":  "y1",
+    }
+    params = {
+        "key": GOOGLE_CSE_API_KEY,
+        "cx": GOOGLE_CSE_CX,
+        "q": query,
+        "lr": "lang_ja",
+        "gl": "jp",
+        "num": min(num * 2, 10),
+    }
+    dr = date_restrict_map.get(tbs)
+    if dr:
+        params["dateRestrict"] = dr
+    try:
+        resp = requests.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params=params,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.debug(f"Google CSE APIエラー: {resp.status_code}")
+            return []
+        items = resp.json().get("items", [])
+        # DuckDuckGo形式に統一
+        return [
+            {
+                "href": item.get("link", ""),
+                "title": item.get("title", ""),
+                "body": item.get("snippet", ""),
+            }
+            for item in items if item.get("link")
+        ]
+    except Exception as e:
+        logger.debug(f"Google CSE例外: {e}")
+        return []
+
+
+def _fetch_hits_ddgs(query: str, tbs: str, num: int) -> list[dict]:
+    """DuckDuckGoでヒットを取得する（フォールバック）。"""
     timelimit = TBS_TO_DDG.get(tbs, "y")
-    media_domain = detect_media_domain(query)
-
     try:
         with DDGS() as ddgs:
             hits = ddgs.text(
@@ -205,71 +248,108 @@ def search_google(query: str, tbs: str, num: int = 10) -> list[dict]:
                 timelimit=timelimit,
                 max_results=num * 2,
             )
-
-            for hit in hits:
-                url = hit.get("href", "")
-                if not url:
-                    continue
-
-                parsed = urlparse(url)
-                domain = parsed.netloc.replace("www.", "")
-
-                # 除外ドメインをスキップ（媒体・SNS・ECなど）
-                if any(ex in domain for ex in EXCLUDE_DOMAINS):
-                    continue
-                # メディア・ポータル系ドメインキーワード除外
-                if any(kw in domain for kw in NG_DOMAIN_KEYWORDS):
-                    continue
-                # 自動学習 + 手動追加の除外ドメインもスキップ
-                learned = load_exclude_list_csv()
-                if any(ex in domain for ex in learned):
-                    continue
-                # 海外TLDをスキップ（日本企業のみ対象）
-                if any(domain.endswith(tld) for tld in FOREIGN_TLDS):
-                    continue
-                # 媒体ドメイン自体も除外（企業サイトのみ対象）
-                if any(md in domain for md in MEDIA_NAME_TO_DOMAIN.values()):
-                    continue
-
-                # 企業HPポジティブシグナル検証（ポータル・ニュース記事の混入を防ぐ）
-                title = hit.get("title", "")
-                snippet = hit.get("body", "")
-                if not _looks_like_company_url(url, title, snippet):
-                    logger.debug(f"企業URL判定NG（シグナル不足）: {url}")
-                    _record_rejected_url(url, title, snippet, query, "信号不足")
-                    continue
-
-                # ファイルURL判定（PDF/Excel/Word）
-                path_lower = parsed.path.lower().split("?")[0]
-                file_type = ""
-                if path_lower.endswith(".pdf"):
-                    file_type = "pdf"
-                elif path_lower.endswith((".xlsx", ".xls")):
-                    file_type = "xlsx"
-                elif path_lower.endswith(".docx"):
-                    file_type = "docx"
-
-                # 官公庁・団体ドメインのファイルは除外（企業リストではなく行政文書）
-                if file_type and any(domain.endswith(tld) for tld in BLOCKED_FILE_TLDS):
-                    continue
-
-                results.append({
-                    "url": url,
-                    "title": title,
-                    "snippet": snippet,
-                    "search_query": query,
-                    "is_media_page": False,
-                    "media_domain": "",
-                    "file_type": file_type,  # "" なら通常HTML
-                })
-
-                if len(results) >= num:
-                    break
-
+            return list(hits) if hits else []
     except Exception as e:
-        logger.error(f"検索エラー [{query}]: {e}")
+        logger.debug(f"DuckDuckGo例外: {e}")
+        return []
 
-    logger.info(f"検索完了 [{query}]: {len(results)}件")
+
+def search_google(query: str, tbs: str, num: int = 10) -> list[dict]:
+    """
+    Google CSE（優先）またはDuckDuckGoで検索し結果を返す。
+
+    媒体名クエリ（例: "KENJA GLOBAL 掲載"）の場合:
+      - 媒体ドメインのURLは is_media_page=True として通す
+      - scraper_agent が記事から企業URLを抽出し企業HPをスクレイプする
+      - rank_agent がクエリ内の媒体名を検出して +2ボーナスを付与
+
+    通常クエリの場合:
+      - SNS・EC・求人サイト等を除外した企業URLを返す
+    """
+    results = []
+
+    # Google CSE優先、失敗時はDuckDuckGo
+    hits = _fetch_hits_google_cse(query, tbs, num)
+    source = "Google CSE"
+    if not hits:
+        hits = _fetch_hits_ddgs(query, tbs, num)
+        source = "DuckDuckGo"
+
+    # 既知媒体ドメインのセット（is_media_page判定用）
+    known_media_domains = set(MEDIA_NAME_TO_DOMAIN.values())
+    learned = load_exclude_list_csv()
+
+    for hit in hits:
+        url = hit.get("href", "")
+        if not url:
+            continue
+
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace("www.", "")
+
+        # 絶対除外ドメイン（SNS・EC・求人・大手メディア）
+        if any(ex in domain for ex in EXCLUDE_DOMAINS):
+            continue
+        # メディア・ポータル系キーワード除外（媒体ドメイン以外）
+        is_known_media = any(md in domain for md in known_media_domains)
+        if not is_known_media and any(kw in domain for kw in NG_DOMAIN_KEYWORDS):
+            continue
+        # 自動学習 + 手動追加の除外ドメイン
+        if any(ex in domain for ex in learned):
+            continue
+        # 海外TLDをスキップ
+        if any(domain.endswith(tld) for tld in FOREIGN_TLDS):
+            continue
+
+        title = hit.get("title", "")
+        snippet = hit.get("body", "")
+
+        # ファイルURL判定
+        path_lower = parsed.path.lower().split("?")[0]
+        file_type = ""
+        if path_lower.endswith(".pdf"):
+            file_type = "pdf"
+        elif path_lower.endswith((".xlsx", ".xls")):
+            file_type = "xlsx"
+        elif path_lower.endswith(".docx"):
+            file_type = "docx"
+
+        # 官公庁ファイルは除外
+        if file_type and any(domain.endswith(tld) for tld in BLOCKED_FILE_TLDS):
+            continue
+
+        # 媒体ドメインの場合は is_media_page=True で通す（企業特集記事として処理）
+        if is_known_media:
+            results.append({
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "search_query": query,
+                "is_media_page": True,
+                "media_domain": domain,
+                "file_type": file_type,
+            })
+            logger.debug(f"媒体記事URL検出 [{source}]: {url}")
+        else:
+            # 通常企業HP：シグナル検証
+            if not _looks_like_company_url(url, title, snippet):
+                logger.debug(f"企業URL判定NG（シグナル不足）: {url}")
+                _record_rejected_url(url, title, snippet, query, "信号不足")
+                continue
+            results.append({
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "search_query": query,
+                "is_media_page": False,
+                "media_domain": "",
+                "file_type": file_type,
+            })
+
+        if len(results) >= num:
+            break
+
+    logger.info(f"検索完了 [{query}]({source}): {len(results)}件")
     time.sleep(random.uniform(1, 3))
     return results
 

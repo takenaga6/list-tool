@@ -11,6 +11,10 @@ except ImportError:
 # HubSpot APIトークン（環境変数から取得）
 HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 
+# Google Custom Search API（企業HP検索用）
+GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
+GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
+
 # 自動登録閾値
 # スコア >= AUTO_REGISTER_SCORE かつ 信頼度 >= AUTO_REGISTER_CONFIDENCE → 確認不要で自動登録
 # スコア < MIN_PENDING_SCORE → 候補リストにも追加しない（自動スキップ）
@@ -25,6 +29,7 @@ RESULTS_FILE = os.path.join(OUTPUT_DIR, "results.csv")
 RESULTS_WITH_QUERY_FILE = os.path.join(OUTPUT_DIR, "results_with_query.csv")
 LOG_FILE = os.path.join(OUTPUT_DIR, "tool.log")
 LEARNED_EXCLUDE_FILE = os.path.join(OUTPUT_DIR, "learned_exclude.json")  # 自動学習した除外ドメイン
+PROCESSED_URLS_FILE = os.path.join(OUTPUT_DIR, "processed_urls.json")    # 処理済みURL（サイクルまたぎ重複防止）
 DOMAIN_FAIL_FILE = os.path.join(OUTPUT_DIR, "domain_fail_stats.json")    # 失敗カウンター
 EXCLUDE_LIST_CSV = os.path.join(OUTPUT_DIR, "exclude_list.csv")          # 手動編集可能な除外ドメインCSV
 FEEDBACK_FILE = os.path.join(OUTPUT_DIR, "feedback.csv")                 # テレアポ結果フィードバック

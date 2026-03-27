@@ -259,11 +259,45 @@ def _is_likely_company_hp(company_name: str, hit: dict) -> bool:
     return matched >= max(1, len(significant) // 2)
 
 
-def search_company_hp(company_name: str, source_url: str) -> dict | None:
+def _search_company_hp_google(company_name: str) -> list[dict]:
     """
-    企業名で公式HPをDuckDuckGo検索し、search_agent形式の結果を返す。
-    ポータル・求人サイト等への誤マッチを防ぐため企業名の一致検証を行う。
-    見つからない場合は None。
+    Google Custom Search APIで企業HPを検索する。
+    APIキー未設定またはエラー時は空リストを返す。
+    """
+    from config import GOOGLE_CSE_API_KEY, GOOGLE_CSE_CX
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_CX:
+        return []
+    try:
+        resp = requests.get(
+            "https://www.googleapis.com/customsearch/v1",
+            params={
+                "key": GOOGLE_CSE_API_KEY,
+                "cx": GOOGLE_CSE_CX,
+                "q": f"{company_name} 公式サイト 会社概要",
+                "lr": "lang_ja",
+                "gl": "jp",
+                "num": 5,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.debug(f"Google CSE APIエラー: {resp.status_code} - {company_name}")
+            return []
+        items = resp.json().get("items", [])
+        # DuckDuckGo形式に合わせて変換
+        return [
+            {"href": item.get("link", ""), "title": item.get("title", ""), "body": item.get("snippet", "")}
+            for item in items
+            if item.get("link")
+        ]
+    except Exception as e:
+        logger.debug(f"Google CSE例外: {company_name} - {e}")
+        return []
+
+
+def _search_company_hp_ddgs(company_name: str) -> list[dict]:
+    """
+    DuckDuckGoで企業HPを検索する（フォールバック用）。
     """
     try:
         from ddgs import DDGS
@@ -274,45 +308,63 @@ def search_company_hp(company_name: str, source_url: str) -> dict | None:
                 safesearch="off",
                 max_results=5,
             )
-            for hit in hits:
-                url = hit.get("href", "")
-                if not url:
-                    continue
-                domain = urlparse(url).netloc.replace("www.", "")
-
-                # スキップ対象ドメイン
-                if any(s in domain for s in SKIP_DOMAINS):
-                    logger.debug(f"SKIP_DOMAINS除外: {domain}")
-                    continue
-                # メディア・ポータル系ドメインキーワード除外
-                if any(kw in domain for kw in NG_DOMAIN_KEYWORDS):
-                    logger.debug(f"NGキーワード除外: {domain}")
-                    continue
-                # 海外TLD除外
-                foreign_tlds = [".us", ".uk", ".au", ".de", ".fr", ".cn", ".kr"]
-                if any(domain.endswith(t) for t in foreign_tlds):
-                    continue
-
-                # 企業名一致検証（ポータルサイト誤マッチ防止）
-                if not _is_likely_company_hp(company_name, hit):
-                    logger.debug(
-                        f"企業名不一致のためスキップ: {company_name} → {url} "
-                        f"(title={hit.get('title', '')[:40]})"
-                    )
-                    continue
-
-                logger.debug(f"HP発見: {company_name} → {url}")
-                return {
-                    "url": url,
-                    "title": hit.get("title", company_name),
-                    "snippet": hit.get("body", ""),
-                    "search_query": f"[リストページ] {company_name}",
-                    "is_media_page": False,
-                    "media_domain": "",
-                    "source_list_url": source_url,
-                }
+            return list(hits) if hits else []
     except Exception as e:
-        logger.debug(f"HP検索エラー: {company_name} - {e}")
+        logger.debug(f"DuckDuckGo例外: {company_name} - {e}")
+        return []
+
+
+def search_company_hp(company_name: str, source_url: str) -> dict | None:
+    """
+    企業名で公式HPを検索し、search_agent形式の結果を返す。
+    Google Custom Search APIを優先し、失敗時はDuckDuckGoにフォールバック。
+    ポータル・求人サイト等への誤マッチを防ぐため企業名の一致検証を行う。
+    見つからない場合は None。
+    """
+    # Google CSE優先、失敗時はDuckDuckGo
+    hits = _search_company_hp_google(company_name)
+    source = "Google CSE"
+    if not hits:
+        hits = _search_company_hp_ddgs(company_name)
+        source = "DuckDuckGo"
+
+    for hit in hits:
+        url = hit.get("href", "")
+        if not url:
+            continue
+        domain = urlparse(url).netloc.replace("www.", "")
+
+        # スキップ対象ドメイン
+        if any(s in domain for s in SKIP_DOMAINS):
+            logger.debug(f"SKIP_DOMAINS除外: {domain}")
+            continue
+        # メディア・ポータル系ドメインキーワード除外
+        if any(kw in domain for kw in NG_DOMAIN_KEYWORDS):
+            logger.debug(f"NGキーワード除外: {domain}")
+            continue
+        # 海外TLD除外
+        foreign_tlds = [".us", ".uk", ".au", ".de", ".fr", ".cn", ".kr"]
+        if any(domain.endswith(t) for t in foreign_tlds):
+            continue
+
+        # 企業名一致検証（ポータルサイト誤マッチ防止）
+        if not _is_likely_company_hp(company_name, hit):
+            logger.debug(
+                f"企業名不一致のためスキップ: {company_name} → {url} "
+                f"(title={hit.get('title', '')[:40]})"
+            )
+            continue
+
+        logger.debug(f"HP発見 [{source}]: {company_name} → {url}")
+        return {
+            "url": url,
+            "title": hit.get("title", company_name),
+            "snippet": hit.get("body", ""),
+            "search_query": f"[リストページ] {company_name}",
+            "is_media_page": False,
+            "media_domain": "",
+            "source_list_url": source_url,
+        }
     return None
 
 

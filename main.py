@@ -31,6 +31,7 @@ from config import (
     AUTO_REGISTER_SCORE,
     AUTO_REGISTER_CONFIDENCE,
     MIN_PENDING_SCORE,
+    PROCESSED_URLS_FILE,
 )
 from agents.search_agent import extract_domain, search_google
 from agents.scraper_agent import scrape_company_info, find_media_article_url
@@ -1072,11 +1073,32 @@ def run_list_daemon(interval_minutes: int = 60):
 
     combined_results_writer = MultiDictWriter(results_writer, results_with_query_writer)
 
+    # 処理済みURLをファイルから読み込む（サイクルまたぎ重複防止）
+    def _load_processed_urls() -> set[str]:
+        if os.path.exists(PROCESSED_URLS_FILE):
+            try:
+                with open(PROCESSED_URLS_FILE, "r", encoding="utf-8") as f:
+                    return set(json.load(f))
+            except Exception:
+                pass
+        return set()
+
+    def _save_processed_urls(urls: set[str]) -> None:
+        try:
+            with open(PROCESSED_URLS_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(urls), f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"処理済みURL保存失敗: {e}")
+
+    # 全サイクル共通の処理済みURLセット（媒体記事はURL単位、企業HPはドメイン単位で記録）
+    global_processed_urls: set[str] = _load_processed_urls()
+    logger.info(f"[LIST-DAEMON] 処理済みURL読み込み: {len(global_processed_urls)}件")
+
     try:
         while True:
             cycle += 1
             cycle_start = time.time()
-            processed_domains: set[str] = set()
+            processed_domains: set[str] = set(global_processed_urls)  # 今サイクルの重複チェック用
             stats = {"success": 0, "duplicate": 0, "ng": 0, "error": 0, "skip": 0, "pending": 0}
             cycle_pending: list[dict] = []  # このサイクルで発見した中間スコア候補
 
@@ -1167,6 +1189,13 @@ def run_list_daemon(interval_minutes: int = 60):
                 stats["pending"] = len(new_entries)
                 print(f"\n  📥 {len(new_entries)}件を pending_review.json に追加（累計: {len(merged)}件）")
                 logger.info(f"[LIST-DAEMON] pending追加: {len(new_entries)}件 / 累計: {len(merged)}件")
+
+            # ─── 処理済みURLを永続保存（次サイクルの重複スキップ用）────────
+            new_urls = processed_domains - global_processed_urls
+            if new_urls:
+                global_processed_urls.update(new_urls)
+                _save_processed_urls(global_processed_urls)
+                logger.info(f"[LIST-DAEMON] 処理済みURL追加: {len(new_urls)}件 / 累計: {len(global_processed_urls)}件")
 
             # ─── サイクル完了レポート ─────────────────────────────────
             elapsed = time.time() - cycle_start
@@ -1581,7 +1610,9 @@ def run_batch(
 
     list_urls: list | None = None
     if auto_mode:
-        query_list = get_sorted_queries(keywords)
+        # 複数人同時使用時の分散: LISTUP_WORKER_OFFSETで各ワーカーの開始位置をずらす
+        worker_offset = int(os.environ.get("LISTUP_WORKER_OFFSET", "0"))
+        query_list = get_sorted_queries(keywords, worker_offset=worker_offset)
         list_urls  = list(MEDIA_LIST_URLS)
         if extra_list_urls:
             list_urls = extra_list_urls + list_urls
