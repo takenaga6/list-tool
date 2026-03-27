@@ -21,14 +21,234 @@ _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 # ──────────────────────────────
 st.set_page_config(
     page_title="Offi-Stretch リスト管理",
-    page_icon="📋",
+    page_icon="🌿",
     layout="wide",
 )
 
-st.title("📋 Offi-Stretch リスト管理")
+# ──────────────────────────────
+# グローバルCSS（SaaSライクなUIデザイン）
+# ──────────────────────────────
+st.markdown("""
+<style>
+/* ── ベースリセット ── */
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: #ffffff !important;
+    font-family: 'Inter', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+}
+[data-testid="stSidebar"] { background-color: #f9fafb !important; }
+[data-testid="stHeader"] { background-color: #ffffff !important; border-bottom: 1px solid #e5e7eb; }
+[data-testid="block-container"] { padding-top: 1.5rem !important; padding-bottom: 2rem !important; }
+
+/* ── ヘッダーロゴエリア ── */
+.app-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 0 1.2rem 0;
+    border-bottom: 2px solid #40b680;
+    margin-bottom: 1.5rem;
+}
+.app-header-logo {
+    width: 36px;
+    height: 36px;
+    background: #40b680;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 18px;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+.app-header-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #111827;
+    letter-spacing: -0.02em;
+}
+.app-header-sub {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    margin-top: 1px;
+}
+
+/* ── タブナビゲーション ── */
+[data-testid="stTabs"] [role="tablist"] {
+    gap: 0 !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    background: transparent !important;
+}
+[data-testid="stTabs"] [role="tab"] {
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    background: transparent !important;
+    color: #6b7280 !important;
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+    padding: 0.6rem 1rem !important;
+    border-radius: 0 !important;
+    transition: color 0.15s, border-color 0.15s !important;
+}
+[data-testid="stTabs"] [role="tab"]:hover {
+    color: #40b680 !important;
+    background: #f0fdf4 !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+    color: #40b680 !important;
+    border-bottom: 2px solid #40b680 !important;
+    font-weight: 600 !important;
+    background: transparent !important;
+}
+
+/* ── ボタン ── */
+[data-testid="stButton"] > button {
+    background-color: #ffffff !important;
+    color: #374151 !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 6px !important;
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+    padding: 0.4rem 0.9rem !important;
+    transition: background 0.15s, border-color 0.15s !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
+}
+[data-testid="stButton"] > button:hover {
+    background-color: #f9fafb !important;
+    border-color: #9ca3af !important;
+}
+[data-testid="stButton"] > button[kind="primary"] {
+    background-color: #40b680 !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: 0 1px 3px rgba(64,182,128,0.3) !important;
+}
+[data-testid="stButton"] > button[kind="primary"]:hover {
+    background-color: #34a370 !important;
+}
+[data-testid="stButton"] > button:disabled {
+    background-color: #f3f4f6 !important;
+    color: #9ca3af !important;
+    border-color: #e5e7eb !important;
+}
+
+/* ── 入力フォーム ── */
+[data-testid="stTextInput"] input,
+[data-testid="stSelectbox"] div[data-baseweb="select"],
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea {
+    border: 1px solid #d1d5db !important;
+    border-radius: 6px !important;
+    font-size: 0.875rem !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+    border-color: #40b680 !important;
+    box-shadow: 0 0 0 3px rgba(64,182,128,0.1) !important;
+}
+
+/* ── セレクトボックス ── */
+[data-baseweb="select"] {
+    background: #ffffff !important;
+}
+
+/* ── data_editor（テーブル） ── */
+[data-testid="stDataFrame"], [data-testid="data-grid-canvas"] {
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+}
+.dvn-scroller { background: #ffffff !important; }
+
+/* ── メトリクスカード ── */
+[data-testid="stMetric"] {
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    padding: 1rem !important;
+}
+[data-testid="stMetricValue"] {
+    color: #111827 !important;
+    font-weight: 700 !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #6b7280 !important;
+    font-size: 0.8rem !important;
+}
+
+/* ── info / success / warning ── */
+[data-testid="stAlert"] {
+    border-radius: 6px !important;
+    font-size: 0.875rem !important;
+}
+
+/* ── セクション見出し ── */
+h1 { color: #111827 !important; font-weight: 700 !important; font-size: 1.5rem !important; }
+h2 { color: #1f2937 !important; font-weight: 600 !important; font-size: 1.2rem !important; }
+h3 { color: #374151 !important; font-weight: 600 !important; font-size: 1rem !important; }
+
+/* ── キャプション / ラベル ── */
+[data-testid="stCaptionContainer"] p, .stCaption {
+    color: #9ca3af !important;
+    font-size: 0.78rem !important;
+}
+label { color: #374151 !important; font-size: 0.875rem !important; font-weight: 500 !important; }
+
+/* ── トグル ── */
+[data-testid="stToggle"] label { font-size: 0.875rem !important; }
+
+/* ── チェックボックス ── */
+[data-testid="stCheckbox"] label { font-size: 0.875rem !important; color: #374151 !important; }
+
+/* ── エクスパンダー ── */
+[data-testid="stExpander"] {
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    background: #f9fafb !important;
+}
+
+/* ── ラジオボタン ── */
+[data-testid="stRadio"] label { font-size: 0.875rem !important; color: #374151 !important; }
+
+/* ── スピナー ── */
+[data-testid="stSpinner"] { color: #40b680 !important; }
+
+/* ── 区切り線 ── */
+hr { border-color: #e5e7eb !important; margin: 1rem 0 !important; }
+
+/* ── ダウンロードボタン ── */
+[data-testid="stDownloadButton"] button {
+    background: #ffffff !important;
+    color: #40b680 !important;
+    border: 1px solid #40b680 !important;
+    border-radius: 6px !important;
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+}
+[data-testid="stDownloadButton"] button:hover {
+    background: #f0fdf4 !important;
+}
+
+/* ── Streamlitデフォルトのフッター非表示 ── */
+footer { visibility: hidden; }
+#MainMenu { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── ヘッダー ──
+st.markdown("""
+<div class="app-header">
+  <div class="app-header-logo">O</div>
+  <div>
+    <div class="app-header-title">Offi-Stretch リスト管理</div>
+    <div class="app-header-sub">Well Body株式会社 — テレアポ営業支援ツール</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 tab_calllist, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
-    ["📋 架電先リスト", "⏳ リストアップ確認待ち", "📋 履歴", "📊 ダッシュボード", "📥 取り込み", "🔍 リストアップ", "🤝 商談一覧"]
+    ["架電先リスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧"]
 )
 
 
@@ -1356,24 +1576,16 @@ with tab_calllist:
 
     # ── リスト表示 ─────────────────────────────────────────────────
     with cl_view:
-        # 自動保存トグル＋オートリフレッシュ
+        # 自動保存（常時ON・30分ごと）
         from streamlit_autorefresh import st_autorefresh
         from datetime import datetime as _dt
-        _as_col1, _as_col2 = st.columns([2, 3])
-        with _as_col1:
-            _autosave_on = st.toggle("自動保存（30分ごと）", value=st.session_state.get("autosave_on", False), key="autosave_on")
-        with _as_col2:
-            _last_save_ts = st.session_state.get("last_autosave_ts")
-            if _last_save_ts:
-                st.caption(f"最終自動保存: {_last_save_ts}")
-
-        if _autosave_on:
-            # 30分ごとにリフレッシュ（ミリ秒）
-            _refresh_count = st_autorefresh(interval=30 * 60 * 1000, key="cl_autorefresh")
-            # 前回のリフレッシュカウントと比較して、オートリフレッシュで来た場合のみ保存
-            if _refresh_count != st.session_state.get("_last_refresh_count", 0):
-                st.session_state["_last_refresh_count"] = _refresh_count
-                st.session_state["_trigger_autosave"] = True
+        _refresh_count = st_autorefresh(interval=30 * 60 * 1000, key="cl_autorefresh")
+        if _refresh_count != st.session_state.get("_last_refresh_count", 0):
+            st.session_state["_last_refresh_count"] = _refresh_count
+            st.session_state["_trigger_autosave"] = True
+        _last_save_ts = st.session_state.get("last_autosave_ts")
+        if _last_save_ts:
+            st.caption(f"最終自動保存: {_last_save_ts}")
 
         df_clist = load_call_list()
         df_fb_join = load_feedback()
