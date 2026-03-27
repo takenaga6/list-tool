@@ -262,8 +262,8 @@ else:
 </div>
 """, unsafe_allow_html=True)
 
-tab_calllist, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting = st.tabs(
-    ["架電先リスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧"]
+tab_calllist, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting, tab_monitor = st.tabs(
+    ["架電先リスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断"]
 )
 
 
@@ -2781,3 +2781,43 @@ with tab_meeting:
                 })
                 st.success(f"✅ {len(new_mi_df)}件を取り込みました。")
                 st.rerun()
+
+# ──────────────────────────────
+# TAB: システム診断
+# ──────────────────────────────
+with tab_monitor:
+    st.subheader("システム診断")
+    st.caption("ファイル整合性・ウェイト異常・学習状況をチェックし、問題があれば自動修復します。")
+
+    if st.button("診断を実行", type="primary", key="run_monitor"):
+        with st.spinner("チェック中..."):
+            try:
+                from agents.monitor_agent import run_check as _run_check
+                _mc_result = _run_check()
+                st.session_state["monitor_result"] = _mc_result
+            except Exception as _me:
+                st.error(f"モニターエラー: {_me}")
+
+    _mr = st.session_state.get("monitor_result")
+    if _mr:
+        # サマリーバッジ
+        _checked_at = _mr.get("checked_at", "")
+        if _mr["has_error"]:
+            st.error(f"エラーあり — {_checked_at}")
+        elif _mr["has_warn"]:
+            st.warning(f"警告あり — {_checked_at}")
+        else:
+            st.success(f"全て正常 — {_checked_at}")
+
+        # チェック結果テーブル
+        _status_icon = {"ok": "✅", "warn": "⚠️", "error": "❌", "fixed": "🔧"}
+        for _c in _mr["checks"]:
+            icon = _status_icon.get(_c["status"], "❓")
+            st.markdown(f"{icon} **{_c['name']}** — {_c['message']}")
+
+        # 自動修復ログ
+        if _mr["repairs"]:
+            st.divider()
+            st.markdown("**自動修復した項目:**")
+            for _r in _mr["repairs"]:
+                st.markdown(f"- {_r}")

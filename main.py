@@ -39,6 +39,7 @@ from agents.rank_agent import evaluate_rank, pre_screen
 from agents.hubspot_agent import HubSpotAgent
 from agents.keyword_agent import get_sorted_queries, record_hit, record_ng, record_rank_result, show_top_queries
 from agents.list_page_agent import scrape_company_list_page
+from agents.monitor_agent import run_check as _monitor_run_check
 
 # ログ設定
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -1605,6 +1606,20 @@ def run_batch(
         label = TIME_PERIODS.get(pk, "3カ月以内")
         tbs   = TIME_PERIOD_TBS.get(label, "")
         periods.append((label, tbs))
+
+    # モニターチェック（ヘルスチェック＋自動修復）
+    try:
+        _mc = _monitor_run_check()
+        for _c in _mc["checks"]:
+            if _c["status"] == "error":
+                logger.error(f"[モニター] {_c['name']}: {_c['message']}")
+            elif _c["status"] in ("warn", "fixed"):
+                logger.warning(f"[モニター] {_c['name']}: {_c['message']}")
+        if _mc["repairs"]:
+            for _r in _mc["repairs"]:
+                print(f"[モニター 自動修復] {_r}")
+    except Exception as _mce:
+        logger.warning(f"モニターチェックスキップ: {_mce}")
 
     # フィードバック学習を自動実行（リストアップ開始前にウェイトを最新化）
     try:
