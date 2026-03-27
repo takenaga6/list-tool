@@ -236,8 +236,23 @@ footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── ヘッダー ──
-st.markdown("""
+# ── ヘッダー（ロゴ画像） ──
+import base64 as _b64
+_logo_path = os.path.join(_LIST_TOOL_DIR, "Offi-Stretch_280px.jpg")
+if os.path.exists(_logo_path):
+    with open(_logo_path, "rb") as _lf:
+        _logo_b64 = _b64.b64encode(_lf.read()).decode()
+    st.markdown(f"""
+<div class="app-header">
+  <img src="data:image/jpeg;base64,{_logo_b64}" style="height:40px;width:auto;object-fit:contain;" />
+  <div>
+    <div class="app-header-title">リスト管理</div>
+    <div class="app-header-sub">Well Body株式会社 — テレアポ営業支援ツール</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+else:
+    st.markdown("""
 <div class="app-header">
   <div class="app-header-logo">O</div>
   <div>
