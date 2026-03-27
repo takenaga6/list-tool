@@ -62,8 +62,8 @@ section[data-testid="stSidebar"] ~ div {
     padding-bottom: 1rem !important;
 }
 
-/* ── テキスト要素すべてを濃い色に統一 ── */
-p, li, td, th, span, div, pre, code,
+/* ── テキスト要素を濃い色に統一（divは除外 — GDGのJS色計算に影響するため） ── */
+p, li, td, th, pre, code,
 [data-testid="stMarkdownContainer"] p,
 [data-testid="stMarkdownContainer"] span,
 [data-testid="stMarkdownContainer"] li,
@@ -214,17 +214,11 @@ div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
 /* ══════════════════════════════════════════════
    data_editor / dataframe
    ══════════════════════════════════════════════ */
+/* 外枠のみ。内部(canvas)はテーマに任せる — CSS上書き厳禁 */
 [data-testid="stDataFrame"],
 [data-testid="stDataEditor"] {
     border: 1px solid #e5e7eb !important;
     border-radius: 8px !important;
-}
-/* Glide Data Grid ラッパー */
-.dvn-scroller,
-.glideDataEditor,
-[class*="gdg-"] {
-    background-color: #ffffff !important;
-    color: #111827 !important;
 }
 
 /* ══════════════════════════════════════════════
