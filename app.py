@@ -30,55 +30,71 @@ st.set_page_config(
 # ──────────────────────────────
 st.markdown("""
 <style>
-/* ── ベースリセット ── */
-html, body, [data-testid="stAppViewContainer"] {
+/* ══════════════════════════════════════════════
+   CSS変数（Streamlit内部テーマ変数を上書き）
+   ══════════════════════════════════════════════ */
+:root {
+    --primary-color: #40b680 !important;
+    --background-color: #ffffff !important;
+    --secondary-background-color: #f9fafb !important;
+    --text-color: #111827 !important;
+    --font: 'Inter', 'Hiragino Sans', 'Yu Gothic', sans-serif !important;
+}
+
+/* ══════════════════════════════════════════════
+   ベース：背景・文字色
+   ══════════════════════════════════════════════ */
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+section[data-testid="stSidebar"] ~ div {
     background-color: #ffffff !important;
-    font-family: 'Inter', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+    color: #111827 !important;
+    font-family: 'Inter', 'Hiragino Sans', 'Yu Gothic', sans-serif !important;
+}
+[data-testid="stHeader"] {
+    background-color: #ffffff !important;
+    border-bottom: 1px solid #e5e7eb !important;
+}
+[data-testid="block-container"] {
+    padding-top: 0.75rem !important;
+    padding-bottom: 1rem !important;
+}
+
+/* ── テキスト要素すべてを濃い色に統一 ── */
+p, li, td, th, span, div, pre, code,
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] span,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stText"] {
     color: #111827 !important;
 }
-[data-testid="stSidebar"] { background-color: #f9fafb !important; }
-[data-testid="stHeader"] { background-color: #ffffff !important; border-bottom: 1px solid #e5e7eb; }
-[data-testid="block-container"] { padding-top: 0.75rem !important; padding-bottom: 1rem !important; }
-/* ── セクション間余白削減 ── */
-[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] { gap: 0.5rem !important; }
+
+/* ══════════════════════════════════════════════
+   セクション間余白
+   ══════════════════════════════════════════════ */
 div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
 .element-container { margin-bottom: 0.25rem !important; }
 
-/* ── ヘッダーロゴエリア ── */
+/* ══════════════════════════════════════════════
+   ヘッダーロゴエリア
+   ══════════════════════════════════════════════ */
 .app-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: flex; align-items: center; gap: 12px;
     padding: 0 0 1.2rem 0;
     border-bottom: 2px solid #40b680;
     margin-bottom: 1.5rem;
 }
-.app-header-logo {
-    width: 36px;
-    height: 36px;
-    background: #40b680;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-size: 18px;
-    font-weight: bold;
-    flex-shrink: 0;
-}
 .app-header-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #111827;
-    letter-spacing: -0.02em;
+    font-size: 1.25rem; font-weight: 700;
+    color: #111827 !important; letter-spacing: -0.02em;
 }
-.app-header-sub {
-    font-size: 0.75rem;
-    color: #9ca3af;
-    margin-top: 1px;
-}
+.app-header-sub { font-size: 0.75rem; color: #9ca3af !important; margin-top: 1px; }
 
-/* ── タブナビゲーション ── */
+/* ══════════════════════════════════════════════
+   タブナビゲーション
+   ══════════════════════════════════════════════ */
 [data-testid="stTabs"] [role="tablist"] {
     gap: 0 !important;
     border-bottom: 1px solid #e5e7eb !important;
@@ -89,63 +105,56 @@ div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
     border-bottom: 2px solid transparent !important;
     background: transparent !important;
     color: #6b7280 !important;
-    font-size: 0.875rem !important;
-    font-weight: 500 !important;
-    padding: 0.6rem 1rem !important;
-    border-radius: 0 !important;
-    transition: color 0.15s, border-color 0.15s !important;
+    font-size: 0.875rem !important; font-weight: 500 !important;
+    padding: 0.6rem 1rem !important; border-radius: 0 !important;
 }
 [data-testid="stTabs"] [role="tab"]:hover {
-    color: #40b680 !important;
-    background: #f0fdf4 !important;
+    color: #40b680 !important; background: #f0fdf4 !important;
 }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
     color: #40b680 !important;
     border-bottom: 2px solid #40b680 !important;
-    font-weight: 600 !important;
-    background: transparent !important;
+    font-weight: 600 !important; background: transparent !important;
 }
 
-/* ── ボタン ── */
+/* ══════════════════════════════════════════════
+   ボタン
+   ══════════════════════════════════════════════ */
 [data-testid="stButton"] > button {
-    background-color: #ffffff !important;
-    color: #374151 !important;
-    border: 1px solid #d1d5db !important;
-    border-radius: 6px !important;
-    font-size: 0.875rem !important;
-    font-weight: 500 !important;
+    background-color: #ffffff !important; color: #374151 !important;
+    border: 1px solid #d1d5db !important; border-radius: 6px !important;
+    font-size: 0.875rem !important; font-weight: 500 !important;
     padding: 0.4rem 0.9rem !important;
-    transition: background 0.15s, border-color 0.15s !important;
     box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
 }
 [data-testid="stButton"] > button:hover {
-    background-color: #f9fafb !important;
-    border-color: #9ca3af !important;
+    background-color: #f9fafb !important; border-color: #9ca3af !important;
 }
 [data-testid="stButton"] > button[kind="primary"] {
-    background-color: #40b680 !important;
-    color: #ffffff !important;
-    border: none !important;
-    box-shadow: 0 1px 3px rgba(64,182,128,0.3) !important;
+    background-color: #40b680 !important; color: #ffffff !important;
+    border: none !important; box-shadow: 0 1px 3px rgba(64,182,128,0.3) !important;
 }
-[data-testid="stButton"] > button[kind="primary"]:hover {
-    background-color: #34a370 !important;
-}
+[data-testid="stButton"] > button[kind="primary"]:hover { background-color: #34a370 !important; }
 [data-testid="stButton"] > button:disabled {
-    background-color: #f3f4f6 !important;
-    color: #9ca3af !important;
+    background-color: #f3f4f6 !important; color: #9ca3af !important;
     border-color: #e5e7eb !important;
 }
+[data-testid="stDownloadButton"] button {
+    background: #ffffff !important; color: #40b680 !important;
+    border: 1px solid #40b680 !important; border-radius: 6px !important;
+    font-size: 0.875rem !important; font-weight: 500 !important;
+}
+[data-testid="stDownloadButton"] button:hover { background: #f0fdf4 !important; }
 
-/* ── 入力フォーム ── */
+/* ══════════════════════════════════════════════
+   入力フォーム
+   ══════════════════════════════════════════════ */
 [data-testid="stTextInput"] input,
 [data-testid="stNumberInput"] input,
 [data-testid="stTextArea"] textarea {
-    border: 1px solid #d1d5db !important;
-    border-radius: 6px !important;
+    background: #ffffff !important; color: #111827 !important;
+    border: 1px solid #d1d5db !important; border-radius: 6px !important;
     font-size: 0.875rem !important;
-    background: #ffffff !important;
-    color: #111827 !important;
 }
 [data-testid="stTextInput"] input:focus,
 [data-testid="stTextArea"] textarea:focus {
@@ -153,95 +162,112 @@ div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
     box-shadow: 0 0 0 3px rgba(64,182,128,0.1) !important;
 }
 
-/* ── セレクトボックス ── */
-[data-baseweb="select"] > div {
-    border: 1px solid #d1d5db !important;
-    border-radius: 6px !important;
-    font-size: 0.875rem !important;
-}
-/* ドロップダウンリスト（ホバー色） */
-[data-baseweb="menu-item"]:hover,
-[data-baseweb="popover"] li:hover {
-    background-color: #f0fdf4 !important;
-}
-
-/* ── data_editor（テーブル） ── */
-[data-testid="stDataFrame"], [data-testid="data-grid-canvas"] {
-    border: 1px solid #e5e7eb !important;
-    border-radius: 8px !important;
-}
-.dvn-scroller { background: #ffffff !important; }
-
-/* ── メトリクスカード ── */
-[data-testid="stMetric"] {
-    background: #f9fafb !important;
-    border: 1px solid #e5e7eb !important;
-    border-radius: 8px !important;
-    padding: 1rem !important;
-}
-[data-testid="stMetricValue"] {
+/* ══════════════════════════════════════════════
+   セレクトボックス・マルチセレクト
+   ══════════════════════════════════════════════ */
+/* コントロール本体 */
+[data-baseweb="select"],
+[data-baseweb="select"] > div,
+[data-baseweb="select"] > div > div {
+    background-color: #ffffff !important;
     color: #111827 !important;
-    font-weight: 700 !important;
-}
-[data-testid="stMetricLabel"] {
-    color: #6b7280 !important;
-    font-size: 0.8rem !important;
-}
-
-/* ── info / success / warning ── */
-[data-testid="stAlert"] {
+    border-color: #d1d5db !important;
     border-radius: 6px !important;
     font-size: 0.875rem !important;
 }
+/* 選択済み値テキスト */
+[data-baseweb="select"] [class*="singleValue"],
+[data-baseweb="select"] [class*="placeholder"],
+[data-baseweb="select"] span {
+    color: #111827 !important;
+}
+/* ドロップダウンリスト */
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] ul,
+[data-baseweb="menu"] {
+    background-color: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 6px !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
+}
+[data-baseweb="option"],
+[data-baseweb="menu-item"],
+[role="option"] {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    font-size: 0.875rem !important;
+}
+[data-baseweb="option"]:hover,
+[data-baseweb="menu-item"]:hover,
+[role="option"]:hover,
+[aria-selected="true"][data-baseweb="option"] {
+    background-color: #f0fdf4 !important;
+    color: #111827 !important;
+}
+/* マルチセレクトタグ */
+[data-baseweb="tag"] {
+    background-color: #e6f7ef !important;
+    color: #111827 !important;
+}
+[data-baseweb="tag"] span { color: #111827 !important; }
 
-/* ── セクション見出し ── */
+/* ══════════════════════════════════════════════
+   data_editor / dataframe
+   ══════════════════════════════════════════════ */
+[data-testid="stDataFrame"],
+[data-testid="stDataEditor"] {
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+}
+/* Glide Data Grid ラッパー */
+.dvn-scroller,
+.glideDataEditor,
+[class*="gdg-"] {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+}
+
+/* ══════════════════════════════════════════════
+   見出し
+   ══════════════════════════════════════════════ */
 h1 { color: #111827 !important; font-weight: 700 !important; font-size: 1.5rem !important; }
 h2 { color: #1f2937 !important; font-weight: 600 !important; font-size: 1.2rem !important; }
 h3 { color: #374151 !important; font-weight: 600 !important; font-size: 1rem !important; }
 
-/* ── キャプション / ラベル ── */
-[data-testid="stCaptionContainer"] p, .stCaption {
-    color: #9ca3af !important;
-    font-size: 0.78rem !important;
-}
+/* ══════════════════════════════════════════════
+   ラベル・キャプション
+   ══════════════════════════════════════════════ */
 label { color: #374151 !important; font-size: 0.875rem !important; font-weight: 500 !important; }
-
-/* ── トグル ── */
+[data-testid="stCaptionContainer"] p { color: #6b7280 !important; font-size: 0.78rem !important; }
+[data-testid="stCheckbox"] label { color: #374151 !important; font-size: 0.875rem !important; }
+[data-testid="stRadio"] label { color: #374151 !important; font-size: 0.875rem !important; }
 [data-testid="stToggle"] label { font-size: 0.875rem !important; }
 
-/* ── チェックボックス ── */
-[data-testid="stCheckbox"] label { font-size: 0.875rem !important; color: #374151 !important; }
+/* ══════════════════════════════════════════════
+   メトリクスカード
+   ══════════════════════════════════════════════ */
+[data-testid="stMetric"] {
+    background: #f9fafb !important; border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important; padding: 1rem !important;
+}
+[data-testid="stMetricValue"] { color: #111827 !important; font-weight: 700 !important; }
+[data-testid="stMetricLabel"] { color: #6b7280 !important; font-size: 0.8rem !important; }
+[data-testid="stMetricDelta"] span { font-size: 0.8rem !important; }
 
-/* ── エクスパンダー ── */
+/* ══════════════════════════════════════════════
+   アラート・エクスパンダー・その他
+   ══════════════════════════════════════════════ */
+[data-testid="stAlert"] { border-radius: 6px !important; font-size: 0.875rem !important; }
+[data-testid="stAlert"] p { color: inherit !important; }
 [data-testid="stExpander"] {
     border: 1px solid #e5e7eb !important;
-    border-radius: 8px !important;
-    background: #f9fafb !important;
+    border-radius: 8px !important; background: #f9fafb !important;
 }
-
-/* ── ラジオボタン ── */
-[data-testid="stRadio"] label { font-size: 0.875rem !important; color: #374151 !important; }
-
-/* ── スピナー ── */
-[data-testid="stSpinner"] { color: #40b680 !important; }
-
-/* ── 区切り線 ── */
 hr { border-color: #e5e7eb !important; margin: 1rem 0 !important; }
 
-/* ── ダウンロードボタン ── */
-[data-testid="stDownloadButton"] button {
-    background: #ffffff !important;
-    color: #40b680 !important;
-    border: 1px solid #40b680 !important;
-    border-radius: 6px !important;
-    font-size: 0.875rem !important;
-    font-weight: 500 !important;
-}
-[data-testid="stDownloadButton"] button:hover {
-    background: #f0fdf4 !important;
-}
-
-/* ── Streamlitデフォルトのフッター非表示 ── */
+/* ══════════════════════════════════════════════
+   フッター・メニュー非表示
+   ══════════════════════════════════════════════ */
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
 </style>
