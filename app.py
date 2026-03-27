@@ -1381,9 +1381,37 @@ with tab_calllist:
                 "アポ獲得", "アプローチ内容", "見込み", "次回アプローチ日",
                 "HPリンク", "業種", "従業員数", "地域", "リストランク", "リストアップ担当者", "条件NG",
             ] if c in filtered_cl.columns]
-            st.dataframe(filtered_cl[show_cols], use_container_width=True, hide_index=True)
 
-            csv_cl = filtered_cl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            # 編集可能列の設定（架電記録系のみ編集可、会社情報系は読み取り専用）
+            _editable_cols = {"架電担当者名", "パスアポ者名", "アポ獲得", "アプローチ内容", "見込み", "次回アプローチ日", "アプローチ日", "アプローチ備考"}
+            _column_config = {
+                col: st.column_config.TextColumn(col, disabled=(col not in _editable_cols))
+                for col in show_cols
+            }
+            _column_config["見込み"] = st.column_config.SelectboxColumn("見込み", options=["", "A", "B", "C"], disabled=False)
+            _column_config["アポ獲得"] = st.column_config.SelectboxColumn("アポ獲得", options=["", "○", "✗"], disabled=False)
+
+            edited_cl = st.data_editor(
+                filtered_cl[show_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config=_column_config,
+                key="cl_data_editor",
+                num_rows="fixed",
+            )
+
+            # 変更があればCSVに保存
+            if not edited_cl.equals(filtered_cl[show_cols]):
+                # filtered_clのインデックスを使って元のdf_clistを更新
+                df_clist_updated = df_clist.copy()
+                for i, orig_idx in enumerate(filtered_cl.index):
+                    for col in _editable_cols:
+                        if col in show_cols and col in edited_cl.columns:
+                            df_clist_updated.at[orig_idx, col] = edited_cl.iloc[i][col]
+                df_clist_updated.to_csv(CALL_LIST_FILE, index=False, encoding="utf-8-sig")
+                st.success("保存しました")
+
+            csv_cl = edited_cl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("📥 CSVダウンロード", data=csv_cl, file_name="call_list_export.csv", mime="text/csv", key="cl_dl")
 
     # ── インポート ─────────────────────────────────────────────────
