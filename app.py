@@ -1824,7 +1824,10 @@ with tab_calllist:
                             except Exception:
                                 pass
                 st.session_state["last_autosave_ts"] = _dt.now().strftime("%H:%M")
+                # data_editorのセッション状態をクリアして保存済みデータと整合させる
+                st.session_state.pop("cl_data_editor", None)
                 st.toast(f"自動保存しました（{st.session_state['last_autosave_ts']}）")
+                st.rerun()
 
             csv_cl = filtered_cl[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("📥 CSVダウンロード", data=csv_cl, file_name="call_list_export.csv", mime="text/csv", key="cl_dl")
