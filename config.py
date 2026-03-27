@@ -23,7 +23,9 @@ AUTO_REGISTER_CONFIDENCE = 0  # 信頼度条件なし
 MIN_PENDING_SCORE = 3         # これ未満は候補リストにも出さない
 
 # 出力ファイル
-OUTPUT_DIR = "output"
+# Render Disk を使う場合は環境変数 OUTPUT_DIR にマウントパスを設定する
+# 例: OUTPUT_DIR=/opt/render/project/src/output
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
 NG_LIST_FILE = os.path.join(OUTPUT_DIR, "ng_list.csv")
 RESULTS_FILE = os.path.join(OUTPUT_DIR, "results.csv")
 RESULTS_WITH_QUERY_FILE = os.path.join(OUTPUT_DIR, "results_with_query.csv")

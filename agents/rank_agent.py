@@ -30,7 +30,14 @@ from agents.keyword_agent import PR_MEDIA as PR_MEDIA_NAMES
 
 logger = logging.getLogger(__name__)
 
+import time as _time
+
 _WEIGHTS_FILE = os.path.join(os.path.dirname(__file__), "..", "output", "signal_weights.json")
+
+# TTLキャッシュ（5分ごとに自動リロード）
+_W: dict = {}
+_W_LOADED_AT: float = 0.0
+_W_TTL: float = 300.0  # 秒
 
 
 def _load_weights() -> dict:
@@ -43,13 +50,18 @@ def _load_weights() -> dict:
         return {}
 
 
-# モジュールロード時に読み込む（起動ごとに1回）
-_W = _load_weights()
+def _get_weights() -> dict:
+    """TTLキャッシュ付きでウェイトを返す。5分以上経過していたら自動リロード。"""
+    global _W, _W_LOADED_AT
+    if _time.time() - _W_LOADED_AT > _W_TTL:
+        _W = _load_weights()
+        _W_LOADED_AT = _time.time()
+    return _W
 
 
 def _w(key: str) -> float:
     """シグナルキーのウェイトを返す（デフォルト1.0）"""
-    return _W.get(key, 1.0)
+    return _get_weights().get(key, 1.0)
 
 # 首都圏以外の都道府県（NG対象）
 _NON_KANTO_PREFECTURES = [

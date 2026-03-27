@@ -102,6 +102,26 @@ def _extract_signals_from_reasons(reasons_text: str) -> list[str]:
     return found
 
 
+def _normalize_name(name: str) -> str:
+    """
+    会社名を正規化して突合精度を上げる。
+    例: 「株式会社 ABC | サービス紹介」→「abc」
+    """
+    import unicodedata
+    # タイトル文字列を除去（| や ｜ 以降）
+    name = re.split(r"[|｜｜\-－―]", name)[0]
+    # 法人格を除去
+    for kw in ["株式会社", "有限会社", "合同会社", "合資会社", "一般社団法人",
+               "公益社団法人", "医療法人", "学校法人", "社会福祉法人"]:
+        name = name.replace(kw, "")
+    # 全角→半角、大文字→小文字
+    name = unicodedata.normalize("NFKC", name)
+    name = name.lower()
+    # 空白・記号を除去
+    name = re.sub(r"[\s\u3000\.\-_（）()・　]+", "", name)
+    return name.strip()
+
+
 def _build_company_signal_map(results: list[dict]) -> dict[str, list[str]]:
     """
     results.csv から {会社名: [シグナルキー, ...]} のマップを作成する。
@@ -111,12 +131,11 @@ def _build_company_signal_map(results: list[dict]) -> dict[str, list[str]]:
         name = (row.get("会社名") or "").strip()
         if not name:
             continue
-        # 会社名に付いているタイトル文字列を除去（例: "○○株式会社 | サービス紹介"）
-        name_clean = re.split(r"[｜|｜]", name)[0].strip()
+        normalized = _normalize_name(name)
         備考 = row.get("備考") or ""
         signals = _extract_signals_from_reasons(備考)
-        if name_clean:
-            mapping[name_clean] = signals
+        if normalized:
+            mapping[normalized] = signals
     return mapping
 
 
@@ -183,12 +202,13 @@ def run_learning() -> dict:
 
     all_classified = success_companies | failure_companies
     for name in all_classified:
-        # results.csv と突合（前方一致も試みる）
-        signals = signal_map.get(name)
+        # 正規化してから突合
+        normalized = _normalize_name(name)
+        signals = signal_map.get(normalized)
         if signals is None:
-            # 部分一致を試みる
-            for mapped_name, sigs in signal_map.items():
-                if name in mapped_name or mapped_name in name:
+            # 部分一致（正規化済み）
+            for mapped_norm, sigs in signal_map.items():
+                if len(normalized) >= 4 and (normalized in mapped_norm or mapped_norm in normalized):
                     signals = sigs
                     break
         if signals is None:
