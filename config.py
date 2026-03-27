@@ -18,8 +18,8 @@ GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
 # 自動登録閾値
 # スコア >= AUTO_REGISTER_SCORE かつ 信頼度 >= AUTO_REGISTER_CONFIDENCE → 確認不要で自動登録
 # スコア < MIN_PENDING_SCORE → 候補リストにも追加しない（自動スキップ）
-AUTO_REGISTER_SCORE = 8       # このスコア以上は自動登録
-AUTO_REGISTER_CONFIDENCE = 2  # このフィールド信頼度以上が必要（0〜4）
+AUTO_REGISTER_SCORE = 3       # 確認待ち相当も含め自動登録（MIN_PENDING_SCOREと同値）
+AUTO_REGISTER_CONFIDENCE = 0  # 信頼度条件なし
 MIN_PENDING_SCORE = 3         # これ未満は候補リストにも出さない
 
 # 出力ファイル

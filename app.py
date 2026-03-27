@@ -1510,6 +1510,44 @@ with tab_calllist:
             st.markdown("### 🔗 HubSpotから読み込む（推奨）")
             st.caption("リストアップで登録した企業を自動取得します。新規登録分も随時反映できます。")
 
+            # ── リスト選択 ──────────────────────────────────────────
+            hs_list_col1, hs_list_col2 = st.columns([3, 1])
+            with hs_list_col1:
+                hs_list_label = st.selectbox(
+                    "取得対象（HubSpotリスト）",
+                    options=["（指定なし：全企業）"] + [
+                        f"{l['name']}  [{l['listId']}]"
+                        for l in st.session_state.get("hs_lists_cache", [])
+                    ],
+                    key="hs_list_select",
+                )
+            with hs_list_col2:
+                st.markdown("　")
+                _load_lists_btn = st.button("🔄 リスト一覧を取得", key="hs_load_lists", use_container_width=True)
+
+            if _load_lists_btn:
+                import requests as _req2
+                _hs_h2 = {"Authorization": f"Bearer {HUBSPOT_TOKEN}", "Content-Type": "application/json"}
+                try:
+                    _lr = _req2.get(
+                        "https://api.hubapi.com/crm/v3/lists/",
+                        headers=_hs_h2,
+                        params={"objectTypeId": "0-2", "limit": 200},
+                        timeout=15,
+                    )
+                    if _lr.ok:
+                        _raw_lists = _lr.json().get("lists", [])
+                        st.session_state["hs_lists_cache"] = [
+                            {"listId": str(l.get("listId", "")), "name": l.get("name", "")}
+                            for l in _raw_lists if l.get("name")
+                        ]
+                        st.success(f"リスト {len(st.session_state['hs_lists_cache'])}件 取得しました")
+                        st.rerun()
+                    else:
+                        st.error(f"リスト取得エラー: {_lr.status_code}")
+                except Exception as _le:
+                    st.error(f"リスト取得例外: {_le}")
+
             hs_col1, hs_col2 = st.columns([2, 1])
             with hs_col1:
                 hs_max = st.number_input("最大取得件数", min_value=50, max_value=2000, value=500, step=50, key="hs_max")
@@ -1517,6 +1555,12 @@ with tab_calllist:
             with hs_col2:
                 st.markdown("　")
                 hs_btn = st.button("📥 HubSpotから取得", type="primary", key="hs_fetch_btn", use_container_width=True)
+
+            # 選択リストIDを解析
+            _selected_list_id = None
+            _hs_list_label_val = st.session_state.get("hs_list_select", "")
+            if _hs_list_label_val and "[" in _hs_list_label_val:
+                _selected_list_id = _hs_list_label_val.split("[")[-1].rstrip("]").strip()
 
             if hs_btn:
                 import requests as _req
@@ -1528,34 +1572,76 @@ with tab_calllist:
                 _hs_after = None
                 _hs_base = "https://api.hubapi.com"
 
+                _HS_PROPS = (
+                    "name,phone,website,state,city,industry,numberofemployees,zip,"
+                    "kaiden_tanto,pass_apo,apo_acquired,approach_content,"
+                    "prospect_rank,approach_date,next_approach_date,approach_memo,joken_ng"
+                )
+
                 with st.spinner("HubSpotから企業情報を取得中..."):
                     try:
-                        while len(_hs_companies) < hs_max:
-                            _hs_params = {
-                                "limit": min(100, hs_max - len(_hs_companies)),
-                                "properties": (
-                                    "name,phone,website,state,city,industry,numberofemployees,zip,"
-                                    "kaiden_tanto,pass_apo,apo_acquired,approach_content,"
-                                    "prospect_rank,approach_date,next_approach_date,approach_memo,joken_ng"
-                                ),
-                            }
-                            if _hs_after:
-                                _hs_params["after"] = _hs_after
-                            _hs_resp = _req.get(
-                                f"{_hs_base}/crm/v3/objects/companies",
-                                headers=_hs_headers,
-                                params=_hs_params,
-                                timeout=15,
-                            )
-                            if not _hs_resp.ok:
-                                st.error(f"HubSpot APIエラー: {_hs_resp.status_code} — {_hs_resp.text[:200]}")
-                                break
-                            _hs_data = _hs_resp.json()
-                            _hs_companies.extend(_hs_data.get("results", []))
-                            _hs_paging = _hs_data.get("paging", {}).get("next", {})
-                            _hs_after = _hs_paging.get("after")
-                            if not _hs_after:
-                                break
+                        if _selected_list_id:
+                            # ── リスト指定：メンバーIDを取得してバッチで詳細取得 ──
+                            _member_ids = []
+                            _list_after = None
+                            while len(_member_ids) < hs_max:
+                                _lm_params = {"limit": min(250, hs_max - len(_member_ids))}
+                                if _list_after:
+                                    _lm_params["after"] = _list_after
+                                _lm_resp = _req.get(
+                                    f"{_hs_base}/crm/v3/lists/{_selected_list_id}/memberships/join-order",
+                                    headers=_hs_headers,
+                                    params=_lm_params,
+                                    timeout=15,
+                                )
+                                if not _lm_resp.ok:
+                                    st.error(f"リストメンバー取得エラー: {_lm_resp.status_code}")
+                                    break
+                                _lm_data = _lm_resp.json()
+                                _member_ids += [r["recordId"] for r in _lm_data.get("results", [])]
+                                _list_after = _lm_data.get("paging", {}).get("next", {}).get("after")
+                                if not _list_after:
+                                    break
+                            # バッチで企業詳細取得（100件ずつ）
+                            for _bi in range(0, len(_member_ids), 100):
+                                _batch_ids = _member_ids[_bi:_bi+100]
+                                _br = _req.post(
+                                    f"{_hs_base}/crm/v3/objects/companies/batch/read",
+                                    headers=_hs_headers,
+                                    json={
+                                        "inputs": [{"id": i} for i in _batch_ids],
+                                        "properties": _HS_PROPS.split(","),
+                                    },
+                                    timeout=20,
+                                )
+                                if _br.ok:
+                                    _hs_companies.extend(_br.json().get("results", []))
+                                else:
+                                    st.warning(f"バッチ取得エラー: {_br.status_code}")
+                        else:
+                            # ── 指定なし：全企業を取得 ──
+                            while len(_hs_companies) < hs_max:
+                                _hs_params = {
+                                    "limit": min(100, hs_max - len(_hs_companies)),
+                                    "properties": _HS_PROPS,
+                                }
+                                if _hs_after:
+                                    _hs_params["after"] = _hs_after
+                                _hs_resp = _req.get(
+                                    f"{_hs_base}/crm/v3/objects/companies",
+                                    headers=_hs_headers,
+                                    params=_hs_params,
+                                    timeout=15,
+                                )
+                                if not _hs_resp.ok:
+                                    st.error(f"HubSpot APIエラー: {_hs_resp.status_code} — {_hs_resp.text[:200]}")
+                                    break
+                                _hs_data = _hs_resp.json()
+                                _hs_companies.extend(_hs_data.get("results", []))
+                                _hs_paging = _hs_data.get("paging", {}).get("next", {})
+                                _hs_after = _hs_paging.get("after")
+                                if not _hs_after:
+                                    break
 
                         if _hs_companies:
                             _hs_rows = []

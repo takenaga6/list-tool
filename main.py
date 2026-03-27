@@ -558,12 +558,10 @@ def process_one_company(
         has_min_fields = bool(company_info.get("company_name")) and (
             bool(company_info.get("phone")) or bool(company_info.get("address"))
         )
-        # 自動登録の必須条件（会社名・URL・電話番号・従業員数がすべて揃っていること）
+        # 自動登録の必須条件（会社名＋URLがあればOK、電話・従業員数は任意）
         has_auto_fields = (
             bool(company_info.get("company_name"))
             and bool(company_info.get("company_url"))
-            and bool(company_info.get("phone"))
-            and bool(company_info.get("employee_count"))
         )
 
         # スコアが低すぎる or 必須フィールド不足 → 候補にも出さない
