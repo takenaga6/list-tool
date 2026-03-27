@@ -1529,19 +1529,23 @@ with tab_calllist:
                 import requests as _req2
                 _hs_h2 = {"Authorization": f"Bearer {HUBSPOT_TOKEN}", "Content-Type": "application/json"}
                 try:
-                    _lr = _req2.get(
-                        "https://api.hubapi.com/crm/v3/lists/",
+                    # searchエンドポイントで会社リスト（セグメント）を取得
+                    _lr = _req2.post(
+                        "https://api.hubapi.com/crm/v3/lists/search",
                         headers=_hs_h2,
-                        params={"limit": 200},
+                        json={
+                            "objectTypeId": "0-2",
+                            "processingTypes": ["DYNAMIC", "MANUAL", "SNAPSHOT"],
+                            "count": 200,
+                            "offset": 0,
+                        },
                         timeout=15,
                     )
                     if _lr.ok:
                         _resp_json = _lr.json()
-                        # HubSpot APIはバージョンによって "lists" または "results" を返す
                         _raw_lists = _resp_json.get("lists") or _resp_json.get("results", [])
                         _parsed = []
                         for l in _raw_lists:
-                            # listId / hs_list_id / id など複数形式に対応
                             _lid = str(l.get("listId") or l.get("hs_list_id") or l.get("id") or "")
                             _lname = l.get("name") or l.get("listName") or ""
                             if _lname and _lid:
@@ -1551,9 +1555,9 @@ with tab_calllist:
                             st.success(f"リスト {len(_parsed)}件 取得しました")
                             st.rerun()
                         else:
-                            st.warning(f"リスト0件。キー: {list(_resp_json.keys())} / total: {_resp_json.get('total', 'なし')} / hasMore: {_resp_json.get('hasMore', 'なし')}")
+                            st.warning(f"リスト0件。キー: {list(_resp_json.keys())} / raw件数: {len(_raw_lists)} / レスポンス先頭: {_lr.text[:300]}")
                     else:
-                        st.error(f"リスト取得エラー: {_lr.status_code} / {_lr.text[:200]}")
+                        st.error(f"リスト取得エラー: {_lr.status_code} / {_lr.text[:300]}")
                 except Exception as _le:
                     st.error(f"リスト取得例外: {_le}")
 
