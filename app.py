@@ -973,7 +973,7 @@ with tab_analysis:
         _total_calls  = len(_df_fb_d)
         _total_mtgs   = len(_df_mt_d) if not _df_mt_d.empty else 0
         _apo_d        = (_df_fb_d["アポ獲得"] == "はい").sum() if not _df_fb_d.empty else 0
-        _contract_d   = (_df_mt_d["契約"] == "はい").sum() if not _df_mt_d.empty else 0
+        _contract_d   = (_df_mt_d["契約"] == "はい").sum() if (not _df_mt_d.empty and "契約" in _df_mt_d.columns) else 0
 
         dk1, dk2, dk3, dk4 = st.columns(4)
         dk1.metric("総架電数",    f"{_total_calls}件")
