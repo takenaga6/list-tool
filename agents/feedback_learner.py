@@ -17,13 +17,16 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# ファイルパス
+# ファイルパス（OUTPUT_DIR環境変数対応）
+import sys as _sys
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_DIR, "..")
-RESULTS_FILE       = os.path.join(_ROOT, "output", "results.csv")
-CALL_LIST_FILE     = os.path.join(_ROOT, "output", "call_list.csv")
-MEETINGS_FILE      = os.path.join(_ROOT, "output", "meetings.csv")
-WEIGHTS_FILE       = os.path.join(_ROOT, "output", "signal_weights.json")
+_sys.path.insert(0, _ROOT)
+from config import OUTPUT_DIR as _OUTPUT_DIR
+RESULTS_FILE       = os.path.join(_OUTPUT_DIR, "results.csv")
+CALL_LIST_FILE     = os.path.join(_OUTPUT_DIR, "call_list.csv")
+MEETINGS_FILE      = os.path.join(_OUTPUT_DIR, "meetings.csv")
+WEIGHTS_FILE       = os.path.join(_OUTPUT_DIR, "signal_weights.json")
 
 # 架電結果の分類
 APO_SUCCESS_PATTERNS = ["社長アポ", "担当アポ", "日程調整中"]

@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 import time as _time
 
-_WEIGHTS_FILE = os.path.join(os.path.dirname(__file__), "..", "output", "signal_weights.json")
+from config import OUTPUT_DIR as _OUTPUT_DIR
+_WEIGHTS_FILE = os.path.join(_OUTPUT_DIR, "signal_weights.json")
 
 # TTLキャッシュ（5分ごとに自動リロード）
 _W: dict = {}

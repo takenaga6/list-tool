@@ -704,8 +704,7 @@ def _clean_pending_df(df: pd.DataFrame) -> pd.DataFrame:
 def _show_pending_review_ui():
     """確認モードの承認UI: pending_review.json を読み込み、チェック付きテーブルで表示・保存する"""
     import json as _jr
-    _LIST_TOOL_DIR_local = os.path.dirname(os.path.abspath(__file__))
-    pending_path = os.path.join(_LIST_TOOL_DIR_local, "output", "pending_review.json")
+    pending_path = os.path.join(OUTPUT_DIR, "pending_review.json")
 
     if not os.path.exists(pending_path):
         st.info("pending_review.json が見つかりません。デーモンを起動するとここにリストが溜まります。")
@@ -1624,7 +1623,7 @@ with tab_listup:
                 st.error(f"実行エラー: {e}")
 
     # ── 前回の確認待ちが残っていれば常に表示 ──────────────────────
-    _pending_path_check = os.path.join(_LIST_TOOL_DIR, "output", "pending_review.json")
+    _pending_path_check = os.path.join(OUTPUT_DIR, "pending_review.json")
     if os.path.exists(_pending_path_check) and not run_btn:
         st.divider()
         st.caption("前回の確認モード結果が残っています。")

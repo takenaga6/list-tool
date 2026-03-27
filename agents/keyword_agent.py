@@ -5,13 +5,18 @@
 
 import json
 import os
+import sys as _sys
 import logging
 import itertools
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-KEYWORD_STATS_FILE = "output/keyword_stats.json"
+_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.join(_DIR, "..")
+_sys.path.insert(0, _ROOT)
+from config import OUTPUT_DIR as _OUTPUT_DIR
+KEYWORD_STATS_FILE = os.path.join(_OUTPUT_DIR, "keyword_stats.json")
 
 # ===== キーワードマスタ =====
 
