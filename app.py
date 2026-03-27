@@ -1549,9 +1549,9 @@ with tab_calllist:
                         st.session_state["hs_lists_cache"] = _parsed
                         if _parsed:
                             st.success(f"リスト {len(_parsed)}件 取得しました")
+                            st.rerun()
                         else:
-                            st.warning(f"リストが0件でした。レスポンス確認: {list(_resp_json.keys())}")
-                        st.rerun()
+                            st.warning(f"リスト0件。キー: {list(_resp_json.keys())} / サンプル: {str(_raw_lists[:1])[:300]}")
                     else:
                         st.error(f"リスト取得エラー: {_lr.status_code} / {_lr.text[:200]}")
                 except Exception as _le:
