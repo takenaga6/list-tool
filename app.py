@@ -1356,6 +1356,25 @@ with tab_calllist:
 
     # ── リスト表示 ─────────────────────────────────────────────────
     with cl_view:
+        # 自動保存トグル＋オートリフレッシュ
+        from streamlit_autorefresh import st_autorefresh
+        from datetime import datetime as _dt
+        _as_col1, _as_col2 = st.columns([2, 3])
+        with _as_col1:
+            _autosave_on = st.toggle("自動保存（30分ごと）", value=st.session_state.get("autosave_on", False), key="autosave_on")
+        with _as_col2:
+            _last_save_ts = st.session_state.get("last_autosave_ts")
+            if _last_save_ts:
+                st.caption(f"最終自動保存: {_last_save_ts}")
+
+        if _autosave_on:
+            # 30分ごとにリフレッシュ（ミリ秒）
+            _refresh_count = st_autorefresh(interval=30 * 60 * 1000, key="cl_autorefresh")
+            # 前回のリフレッシュカウントと比較して、オートリフレッシュで来た場合のみ保存
+            if _refresh_count != st.session_state.get("_last_refresh_count", 0):
+                st.session_state["_last_refresh_count"] = _refresh_count
+                st.session_state["_trigger_autosave"] = True
+
         df_clist = load_call_list()
         df_fb_join = load_feedback()
 
@@ -1496,6 +1515,38 @@ with tab_calllist:
                 else:
                     st.success("CSVに保存しました")
                 st.rerun()
+
+            # 自動保存トリガー（30分ごとのオートリフレッシュで発火）
+            if st.session_state.pop("_trigger_autosave", False):
+                _auto_save_df = edited_cl.copy()
+                for _bc in ["アポ獲得", "条件NG"]:
+                    if _bc in _auto_save_df.columns:
+                        _auto_save_df[_bc] = _auto_save_df[_bc].apply(lambda v: "○" if v is True else "")
+                _auto_updated = df_clist.copy()
+                for i, orig_idx in enumerate(filtered_cl.index):
+                    for col in _editable_cols:
+                        if col in show_cols and col in _auto_save_df.columns:
+                            _auto_updated.at[orig_idx, col] = _auto_save_df.iloc[i][col]
+                _auto_updated.to_csv(CALL_LIST_FILE, index=False, encoding="utf-8-sig")
+                from config import HUBSPOT_TOKEN as _AS_TOKEN
+                if _AS_TOKEN and "hs_id" in _auto_updated.columns:
+                    import requests as _ar
+                    _ah = {"Authorization": f"Bearer {_AS_TOKEN}", "Content-Type": "application/json"}
+                    for i, orig_idx in enumerate(filtered_cl.index):
+                        _aid = _auto_updated.at[orig_idx, "hs_id"]
+                        if not _aid:
+                            continue
+                        _ap = {hs_prop: str(_auto_save_df.iloc[i][jp_col])
+                               for jp_col, hs_prop in _HS_PROP_MAP.items()
+                               if jp_col in show_cols and jp_col in _auto_save_df.columns}
+                        if _ap:
+                            try:
+                                _ar.patch(f"https://api.hubapi.com/crm/v3/objects/companies/{_aid}",
+                                          headers=_ah, json={"properties": _ap}, timeout=10)
+                            except Exception:
+                                pass
+                st.session_state["last_autosave_ts"] = _dt.now().strftime("%H:%M")
+                st.toast(f"自動保存しました（{st.session_state['last_autosave_ts']}）")
 
             csv_cl = filtered_cl[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("📥 CSVダウンロード", data=csv_cl, file_name="call_list_export.csv", mime="text/csv", key="cl_dl")
