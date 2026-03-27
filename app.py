@@ -153,41 +153,16 @@ div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
     box-shadow: 0 0 0 3px rgba(64,182,128,0.1) !important;
 }
 
-/* ── セレクトボックス（黒背景を白に強制上書き）── */
-[data-baseweb="select"],
-[data-baseweb="select"] > div,
-[data-testid="stSelectbox"] [data-baseweb="select"],
-[data-testid="stSelectbox"] [data-baseweb="select"] > div {
-    background-color: #ffffff !important;
-    color: #111827 !important;
+/* ── セレクトボックス ── */
+[data-baseweb="select"] > div {
     border: 1px solid #d1d5db !important;
     border-radius: 6px !important;
     font-size: 0.875rem !important;
 }
-/* ドロップダウンリスト本体 */
-[data-baseweb="popover"] [data-baseweb="menu"],
-[data-baseweb="popover"] ul {
-    background-color: #ffffff !important;
-    color: #111827 !important;
-    border: 1px solid #e5e7eb !important;
-    border-radius: 6px !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important;
-}
-[data-baseweb="popover"] li,
-[data-baseweb="menu-item"] {
-    background-color: #ffffff !important;
-    color: #111827 !important;
-    font-size: 0.875rem !important;
-}
+/* ドロップダウンリスト（ホバー色） */
 [data-baseweb="menu-item"]:hover,
 [data-baseweb="popover"] li:hover {
     background-color: #f0fdf4 !important;
-    color: #111827 !important;
-}
-/* 選択済みの値テキスト */
-[data-baseweb="select"] span,
-[data-baseweb="select"] [data-testid="stMarkdownContainer"] {
-    color: #111827 !important;
 }
 
 /* ── data_editor（テーブル） ── */
