@@ -65,7 +65,7 @@ def load_company_list() -> list[str]:
 # 架電先リスト 全カラム定義
 # ── 会社情報（HubSpot/インポートで入る静的データ）──
 _CALL_LIST_STATIC_COLS = [
-    "会社名", "HPリンク", "説明リンク", "電話番号", "代表者",
+    "hs_id", "会社名", "HPリンク", "説明リンク", "電話番号", "代表者",
     "リストランク", "地域", "業種", "従業員数",
     "リストアップ担当者", "条件NG", "リストアップ更新日",
 ]
@@ -75,6 +75,24 @@ _CALL_LIST_ACTIVITY_COLS = [
     "アポ獲得", "アプローチ内容", "見込み", "アプローチ備考", "次回アプローチ日",
 ]
 _CALL_LIST_COLS = _CALL_LIST_STATIC_COLS + _CALL_LIST_ACTIVITY_COLS
+
+# HubSpotカスタムプロパティ ↔ 日本語カラム名 マッピング
+_HS_PROP_MAP = {
+    "架電担当者名":     "kaiden_tanto",
+    "パスアポ者名":     "pass_apo",
+    "アポ獲得":         "apo_acquired",
+    "アプローチ内容":   "approach_content",
+    "見込み":           "prospect_rank",
+    "アプローチ日":     "approach_date",
+    "次回アプローチ日": "next_approach_date",
+    "アプローチ備考":   "approach_memo",
+    "条件NG":           "joken_ng",
+}
+
+_APPROACH_OPTIONS = [
+    "", "受付NG", "担当NG", "社長NG", "取材NG", "追客", "社長アポ", "担当アポ",
+    "資料送付", "不通リスト", "追わない", "ナーチャリング", "日程調整中", "触るな危険！",
+]
 
 
 def load_call_list() -> pd.DataFrame:
@@ -1375,24 +1393,38 @@ with tab_calllist:
             uncalled = (filtered_cl["アプローチ日"].replace("", pd.NA).isna().sum())
             st.caption(f"表示: {len(filtered_cl)}件 / 未架電（アプローチ日なし）: {uncalled}件")
 
-            # 表示列: 重要度順に並べる
+            # 表示列: 重要度順（hs_idは非表示）
             show_cols = [c for c in [
                 "会社名", "電話番号", "代表者", "アプローチ日", "架電担当者名", "パスアポ者名",
-                "アポ獲得", "アプローチ内容", "見込み", "次回アプローチ日",
+                "アポ獲得", "アプローチ内容", "見込み", "次回アプローチ日", "アプローチ備考",
                 "HPリンク", "業種", "従業員数", "地域", "リストランク", "リストアップ担当者", "条件NG",
             ] if c in filtered_cl.columns]
 
-            # 編集可能列の設定（架電記録系のみ編集可、会社情報系は読み取り専用）
-            _editable_cols = {"架電担当者名", "パスアポ者名", "アポ獲得", "アプローチ内容", "見込み", "次回アプローチ日", "アプローチ日", "アプローチ備考"}
+            # チェックボックス列をbool型に変換して表示
+            _display_cl = filtered_cl[show_cols].copy()
+            for _bc in ["アポ獲得", "条件NG"]:
+                if _bc in _display_cl.columns:
+                    _display_cl[_bc] = _display_cl[_bc].isin(["○", "〇", "1", "true", "True"])
+
+            _editable_cols = {
+                "架電担当者名", "パスアポ者名", "アポ獲得", "アプローチ内容",
+                "見込み", "次回アプローチ日", "アプローチ日", "アプローチ備考", "条件NG",
+            }
             _column_config = {
                 col: st.column_config.TextColumn(col, disabled=(col not in _editable_cols))
                 for col in show_cols
             }
-            _column_config["見込み"] = st.column_config.SelectboxColumn("見込み", options=["", "A", "B", "C"], disabled=False)
-            _column_config["アポ獲得"] = st.column_config.SelectboxColumn("アポ獲得", options=["", "○", "✗"], disabled=False)
+            _column_config["見込み"] = st.column_config.SelectboxColumn(
+                "見込み", options=["", "A", "B", "C"], disabled=False)
+            _column_config["アポ獲得"] = st.column_config.CheckboxColumn("アポ獲得", disabled=False)
+            _column_config["条件NG"]   = st.column_config.CheckboxColumn("条件NG",   disabled=False)
+            _column_config["アプローチ内容"] = st.column_config.SelectboxColumn(
+                "アプローチ内容", options=_APPROACH_OPTIONS, disabled=False)
+            if "アプローチ備考" in show_cols:
+                _column_config["アプローチ備考"] = st.column_config.TextColumn("アプローチ備考", disabled=False)
 
             edited_cl = st.data_editor(
-                filtered_cl[show_cols],
+                _display_cl,
                 use_container_width=True,
                 hide_index=True,
                 column_config=_column_config,
@@ -1400,18 +1432,72 @@ with tab_calllist:
                 num_rows="fixed",
             )
 
-            # 変更があればCSVに保存
-            if not edited_cl.equals(filtered_cl[show_cols]):
-                # filtered_clのインデックスを使って元のdf_clistを更新
+            # 保存ボタン（変更検知）
+            _has_changes = not edited_cl.equals(_display_cl)
+            _sv_col, _ = st.columns([1, 3])
+            with _sv_col:
+                _save_btn = st.button("💾 HubSpotに保存", type="primary", key="cl_save_hs",
+                                      disabled=not _has_changes)
+
+            if _save_btn and _has_changes:
+                # bool → 文字列に戻す
+                _save_df = edited_cl.copy()
+                for _bc in ["アポ獲得", "条件NG"]:
+                    if _bc in _save_df.columns:
+                        _save_df[_bc] = _save_df[_bc].apply(lambda v: "○" if v is True else "")
+
+                # CSVに保存
                 df_clist_updated = df_clist.copy()
                 for i, orig_idx in enumerate(filtered_cl.index):
                     for col in _editable_cols:
-                        if col in show_cols and col in edited_cl.columns:
-                            df_clist_updated.at[orig_idx, col] = edited_cl.iloc[i][col]
+                        if col in show_cols and col in _save_df.columns:
+                            df_clist_updated.at[orig_idx, col] = _save_df.iloc[i][col]
                 df_clist_updated.to_csv(CALL_LIST_FILE, index=False, encoding="utf-8-sig")
-                st.success("保存しました")
 
-            csv_cl = edited_cl.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                # HubSpotに反映（hs_idがある行のみ）
+                from config import HUBSPOT_TOKEN as _HS_TOKEN
+                _hs_id_col_exists = "hs_id" in df_clist_updated.columns
+                if _HS_TOKEN and _hs_id_col_exists:
+                    import requests as _req
+                    _hs_headers = {
+                        "Authorization": f"Bearer {_HS_TOKEN}",
+                        "Content-Type": "application/json",
+                    }
+                    _hs_ok = 0
+                    _hs_errors = 0
+                    with st.spinner("HubSpotに保存中..."):
+                        for i, orig_idx in enumerate(filtered_cl.index):
+                            _hs_id = df_clist_updated.at[orig_idx, "hs_id"]
+                            if not _hs_id:
+                                continue
+                            _props = {}
+                            for jp_col, hs_prop in _HS_PROP_MAP.items():
+                                if jp_col in show_cols and jp_col in _save_df.columns:
+                                    _props[hs_prop] = str(_save_df.iloc[i][jp_col])
+                            if not _props:
+                                continue
+                            try:
+                                _r = _req.patch(
+                                    f"https://api.hubapi.com/crm/v3/objects/companies/{_hs_id}",
+                                    headers=_hs_headers,
+                                    json={"properties": _props},
+                                    timeout=10,
+                                )
+                                if _r.ok:
+                                    _hs_ok += 1
+                                else:
+                                    _hs_errors += 1
+                            except Exception:
+                                _hs_errors += 1
+                    if _hs_errors == 0:
+                        st.success(f"保存しました（HubSpot {_hs_ok}件反映）")
+                    else:
+                        st.warning(f"保存しました（HubSpot {_hs_ok}件反映、{_hs_errors}件エラー）")
+                else:
+                    st.success("CSVに保存しました")
+                st.rerun()
+
+            csv_cl = filtered_cl[show_cols].to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("📥 CSVダウンロード", data=csv_cl, file_name="call_list_export.csv", mime="text/csv", key="cl_dl")
 
     # ── インポート ─────────────────────────────────────────────────
@@ -1447,7 +1533,11 @@ with tab_calllist:
                         while len(_hs_companies) < hs_max:
                             _hs_params = {
                                 "limit": min(100, hs_max - len(_hs_companies)),
-                                "properties": "name,phone,website,state,city,industry,numberofemployees,zip",
+                                "properties": (
+                                    "name,phone,website,state,city,industry,numberofemployees,zip,"
+                                    "kaiden_tanto,pass_apo,apo_acquired,approach_content,"
+                                    "prospect_rank,approach_date,next_approach_date,approach_memo,joken_ng"
+                                ),
                             }
                             if _hs_after:
                                 _hs_params["after"] = _hs_after
@@ -1475,6 +1565,7 @@ with tab_calllist:
                                 if not _name:
                                     continue
                                 _hs_rows.append({
+                                    "hs_id":            _c.get("id", ""),
                                     "会社名":           _name,
                                     "電話番号":         (_p.get("phone") or "").strip(),
                                     "代表者":           "",
@@ -1485,8 +1576,17 @@ with tab_calllist:
                                     "従業員数":         (_p.get("numberofemployees") or "").strip(),
                                     "リストランク":      "",
                                     "リストアップ担当者": "",
-                                    "条件NG":           "",
+                                    "条件NG":           "○" if (_p.get("joken_ng") or "").lower() in ("true", "1", "yes") else "",
                                     "リストアップ更新日": "",
+                                    # 架電記録カスタムプロパティ
+                                    "架電担当者名":     (_p.get("kaiden_tanto") or "").strip(),
+                                    "パスアポ者名":     (_p.get("pass_apo") or "").strip(),
+                                    "アポ獲得":         "○" if (_p.get("apo_acquired") or "").lower() in ("true", "1", "yes", "○") else "",
+                                    "アプローチ内容":   (_p.get("approach_content") or "").strip(),
+                                    "見込み":           (_p.get("prospect_rank") or "").strip(),
+                                    "アプローチ日":     (_p.get("approach_date") or "").strip(),
+                                    "次回アプローチ日": (_p.get("next_approach_date") or "").strip(),
+                                    "アプローチ備考":   (_p.get("approach_memo") or "").strip(),
                                 })
 
                             _hs_df = pd.DataFrame(_hs_rows)
