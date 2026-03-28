@@ -415,6 +415,10 @@ def load_meetings() -> pd.DataFrame:
     if os.path.exists(MEETINGS_FILE):
         try:
             df = pd.read_csv(MEETINGS_FILE, encoding="utf-8-sig")
+            # 旧カラム名「企業名」→「会社名」に自動マイグレーション
+            if "企業名" in df.columns and "会社名" not in df.columns:
+                df = df.rename(columns={"企業名": "会社名"})
+                df.to_csv(MEETINGS_FILE, index=False, encoding="utf-8-sig")
             for col in _MEETING_COLS:
                 if col not in df.columns:
                     df[col] = ""
