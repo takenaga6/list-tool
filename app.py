@@ -1245,13 +1245,15 @@ with tab_analysis:
             st.divider()
             _mdc1, _mdc2 = st.columns(2)
             with _mdc1:
-                st.markdown("**フェーズ別件数**")
-                _ph_df = _df_mt_dash2["フェーズ"].value_counts().reset_index()
-                _ph_df.columns = ["フェーズ", "件数"]
+                _ph_col = "フェーズ" if "フェーズ" in _df_mt_dash2.columns else "商談結果"
+                _ph_label = _ph_col + "別件数"
+                st.markdown(f"**{_ph_label}**")
+                _ph_df = _df_mt_dash2[_ph_col].value_counts().reset_index()
+                _ph_df.columns = [_ph_col, "件数"]
                 _chart_ph = alt.Chart(_ph_df).mark_bar(color="#4C78A8").encode(
-                    x=alt.X("フェーズ:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
+                    x=alt.X(f"{_ph_col}:N", sort="-y", axis=alt.Axis(labelAngle=0, labelFontSize=11)),
                     y=alt.Y("件数:Q"),
-                    tooltip=["フェーズ", "件数"],
+                    tooltip=[_ph_col, "件数"],
                 ).properties(height=250)
                 st.altair_chart(_chart_ph, use_container_width=True)
             with _mdc2:
@@ -1280,14 +1282,16 @@ with tab_analysis:
 
             # 次のアクションが必要な案件
             st.divider()
-            st.markdown("**次のアクションが必要な案件**")
-            _action_needed = _df_mt_dash2[
-                _df_mt_dash2["商談結果"].isin(["検討中", "次回アポあり", "保留"]) &
-                _df_mt_dash2["次のアクション"].notna() &
-                (_df_mt_dash2["次のアクション"] != "")
-            ].sort_values("商談日", ascending=False)
+            st.markdown("**進行中案件**")
+            _prog_mask = _df_mt_dash2["商談結果"].isin(["検討中", "次回アポあり", "保留"])
+            if "次のアクション" in _df_mt_dash2.columns:
+                _prog_mask = _prog_mask & _df_mt_dash2["次のアクション"].notna() & (_df_mt_dash2["次のアクション"] != "")
+            _action_needed = _df_mt_dash2[_prog_mask]
+            _sort_col = "商談日" if "商談日" in _action_needed.columns else "記録日"
+            if _sort_col in _action_needed.columns:
+                _action_needed = _action_needed.sort_values(_sort_col, ascending=False)
             if not _action_needed.empty:
-                _show_mt_cols = [c for c in ["商談日", "会社名", "担当者名", "担当名", "フェーズ", "商談結果", "次のアクション", "規模感・金額"] if c in _action_needed.columns]
+                _show_mt_cols = [c for c in ["記録日", "会社名", "アポ担当", "商談結果", "アプローチ内容", "次回アプローチ日"] if c in _action_needed.columns]
                 st.dataframe(_action_needed[_show_mt_cols], use_container_width=True, hide_index=True)
             else:
                 st.caption("対象なし")
