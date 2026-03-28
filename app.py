@@ -401,9 +401,9 @@ def update_call_list_row(company_name: str, update_data: dict):
 
 # 商談一覧 全カラム定義
 _MEETING_COLS = [
-    "記録日", "アポ獲得月", "アポ獲得者", "リストアップ", "企業名",
+    "記録日", "アポ獲得月", "アポ獲得者", "リストアップ", "会社名",
     "アポ獲得概要", "アポ担当", "前確認実施済", "アポ獲得日", "アポ実施予定日",
-    "実施の有無", "商談結果", "責任者の有無", "アポ実施担当者",
+    "実施の有無", "商談結果", "契約", "責任者の有無", "アポ実施担当者",
     "失注理由", "失注理由（詳細）", "業種", "企業URL",
     "再アプローチ担当", "アプローチ担当名", "役職", "電話番号",
     "ステータス", "見込み", "アプローチ内容", "次回アプローチ日",
@@ -2415,7 +2415,7 @@ def _save_meeting_row(row_data: dict):
         from config import _find_query_for_company, _find_domain_for_company, load_exclude_list_csv, add_to_exclude_csv
         from agents.keyword_agent import record_ng, record_rank_result
 
-        company = row_data.get("企業名", "")
+        company = row_data.get("会社名", "")
         result  = row_data.get("商談結果", "")
         mikomi  = row_data.get("見込み", "")
         query   = _find_query_for_company(company)
@@ -2509,7 +2509,7 @@ with tab_meeting:
                 "アポ獲得月":     mt_apo_month,
                 "アポ獲得者":     mt_apo_getter,
                 "リストアップ":   mt_listup,
-                "企業名":         mt_company,
+                "会社名":         mt_company,
                 "アポ獲得概要":   mt_summary,
                 "アポ担当":       mt_apo_tanto,
                 "前確認実施済":   mt_pre_check,
@@ -2517,6 +2517,7 @@ with tab_meeting:
                 "アポ実施予定日":  str(mt_plan_date) if mt_plan_date else "",
                 "実施の有無":     mt_jisshi,
                 "商談結果":       mt_result,
+                "契約":           "はい" if mt_result in ("受注",) else "",
                 "責任者の有無":   mt_sekinin,
                 "アポ実施担当者":  mt_apo_exec,
                 "失注理由":       mt_shissou_r,

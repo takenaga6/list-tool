@@ -30,22 +30,9 @@ from datetime import datetime, timedelta
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_DIR, "..")
 _sys.path.insert(0, _ROOT)
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, SIGNAL_KEYS, WEIGHT_MIN, WEIGHT_MAX, DEFAULT_WEIGHT
 
 logger = logging.getLogger(__name__)
-
-# ────────────────────────────────────────
-# 定数
-# ────────────────────────────────────────
-SIGNAL_KEYS = [
-    "PR媒体掲載", "健康経営メディア掲載", "法定外福利厚生",
-    "フィジカルケア未着手", "健康経営注力", "健康推進・セミナー",
-    "経営者の健康意識", "PR広告投資", "成長・自社ビル",
-    "高利益率B2B業種", "契約実績サイズ", "単一拠点",
-]
-WEIGHT_MIN = 0.4
-WEIGHT_MAX = 2.5
-DEFAULT_WEIGHT = 1.0
 
 # CSVの必須カラム定義
 CSV_REQUIRED_COLS = {

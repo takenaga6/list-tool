@@ -22,7 +22,7 @@ import sys as _sys
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_DIR, "..")
 _sys.path.insert(0, _ROOT)
-from config import OUTPUT_DIR as _OUTPUT_DIR
+from config import OUTPUT_DIR as _OUTPUT_DIR, SIGNAL_KEYS, WEIGHT_MIN, WEIGHT_MAX
 RESULTS_FILE       = os.path.join(_OUTPUT_DIR, "results.csv")
 CALL_LIST_FILE     = os.path.join(_OUTPUT_DIR, "call_list.csv")
 MEETINGS_FILE      = os.path.join(_OUTPUT_DIR, "meetings.csv")
@@ -32,25 +32,6 @@ WEIGHTS_FILE       = os.path.join(_OUTPUT_DIR, "signal_weights.json")
 APO_SUCCESS_PATTERNS = ["社長アポ", "担当アポ", "日程調整中"]
 APO_NG_PATTERNS      = ["受付NG", "担当NG", "社長NG", "取材NG", "追わない", "不通リスト", "触るな危険"]
 
-# signal_weights.json のキー一覧（rank_agent.py と同期）
-SIGNAL_KEYS = [
-    "PR媒体掲載",
-    "健康経営メディア掲載",
-    "法定外福利厚生",
-    "フィジカルケア未着手",
-    "健康経営注力",
-    "健康推進・セミナー",
-    "経営者の健康意識",
-    "PR広告投資",
-    "成長・自社ビル",
-    "高利益率B2B業種",
-    "契約実績サイズ",
-    "単一拠点",
-]
-
-# ウェイトのクランプ範囲
-WEIGHT_MIN = 0.4
-WEIGHT_MAX = 2.5
 # 学習に必要な最低サンプル数（少なすぎると誤学習）
 MIN_SAMPLES = 3
 

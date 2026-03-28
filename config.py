@@ -39,6 +39,19 @@ MEETINGS_FILE = os.path.join(OUTPUT_DIR, "meetings.csv")                 # 商�
 CALL_LIST_FILE = os.path.join(OUTPUT_DIR, "call_list.csv")               # 架電先リスト
 IMPORT_SETTINGS_FILE = os.path.join(OUTPUT_DIR, "import_settings.json") # インポート設定の記憶
 
+# シグナルキー一覧（rank_agent / feedback_learner / monitor_agent で共有）
+SIGNAL_KEYS = [
+    "PR媒体掲載", "健康経営メディア掲載", "法定外福利厚生",
+    "フィジカルケア未着手", "健康経営注力", "健康推進・セミナー",
+    "経営者の健康意識", "PR広告投資", "成長・自社ビル",
+    "高利益率B2B業種", "契約実績サイズ", "単一拠点",
+]
+
+# シグナルウェイトのクランプ範囲
+WEIGHT_MIN = 0.4
+WEIGHT_MAX = 2.5
+DEFAULT_WEIGHT = 1.0
+
 
 def load_exclude_list_csv() -> set[str]:
     """
