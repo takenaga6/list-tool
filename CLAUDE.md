@@ -57,6 +57,38 @@ from config import OUTPUT_DIR as _OUTPUT_DIR
 - `streamlit-autorefresh` で30分ごとに自動保存
 - 保存後は `st.session_state.pop("cl_data_editor", None)` + `st.rerun()` が必須（キャッシュ残留防止）
 
+## 共有定数（config.py で一元管理）
+
+以下は **config.py が唯一の定義元**。他のファイルで再定義しないこと。
+
+| 定数 | 内容 |
+|---|---|
+| `SIGNAL_KEYS` | 12シグナルのキー名リスト |
+| `WEIGHT_MIN` / `WEIGHT_MAX` / `DEFAULT_WEIGHT` | シグナルウェイトのクランプ範囲 |
+| `OUTPUT_DIR` + 各ファイルパス | 全データファイルのパス定義 |
+
+```python
+# 正しいimport例（agentsディレクトリ内から）
+from config import OUTPUT_DIR, SIGNAL_KEYS, WEIGHT_MIN, WEIGHT_MAX
+```
+
+## meetings.csv のカラム定義
+
+`_MEETING_COLS`（app.py）が正式定義。以下を守ること。
+
+- 会社名キーは **「会社名」**（旧「企業名」は廃止済み）
+- **「契約」列が必須**（受注時に自動で「はい」をセット）
+- `load_meetings()` が旧「企業名」→「会社名」を自動マイグレーションする（後方互換）
+- `feedback_learner.py` は `row.get("会社名")` と `row.get("契約")` を読む
+
+## フィードバック学習の前提条件
+
+学習が機能するには **meetings.csv / call_list.csv の会社名が results.csv にも存在する**必要がある。
+
+リストアップ以外のルート（過去商談インポート・手入力）で登録した会社は results.csv にないため、`supplement_agent.supplement_results_csv()` が自動補完する:
+- 「学習を実行」ボタン → call_list + meetings の未登録企業を最大20社補完してから学習
+- 商談インポート完了後 → インポートした会社を最大50社補完
+
 ## 既知のバグパターン（再発防止）
 
 ### 従業員数フィルター漏れ
@@ -67,3 +99,7 @@ from config import OUTPUT_DIR as _OUTPUT_DIR
 ### Streamlit data_editor が真っ白になる
 - 原因: CSS で GDG要素に `background-color: #ffffff` を当てるとCanvasが隠れる
 - 対処: data_editor 内部への CSS 上書き一切禁止。テーマはCLIフラグに任せる
+
+### ダッシュボードの KeyError
+- meetings.csv に存在しない列を直接 `df["列名"]` で参照すると落ちる
+- 必ず `"列名" in df.columns` でチェックするか、`df.get("列名")` を使う

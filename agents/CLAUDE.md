@@ -6,7 +6,8 @@
 |---|---|
 | `rank_agent.py` | 企業をA/B/C/NGにスコアリング（12シグナル）。signal_weights.jsonをTTLキャッシュ（5分）で読む |
 | `keyword_agent.py` | 検索クエリ自動生成・A/Bランク発見率で優先順位付け。keyword_stats.jsonに学習 |
-| `feedback_learner.py` | call_list.csv + meetings.csv → signal_weights.json を自動更新（アポ率ベース） |
+| `feedback_learner.py` | call_list.csv + meetings.csv → signal_weights.json を自動更新（アポ率ベース）。学習前に未登録企業を自動補完 |
+| `supplement_agent.py` | 会社名リストを受け取り results.csv 未登録企業をHP検索→スクレイピング→ランク判定して追記。feedback_learner と app.py 商談インポートから呼ばれる |
 | `monitor_agent.py` | ヘルスチェック＋自動修復（ファイル破損・ウェイト異常・学習停滞を検知） |
 | `search_agent.py` | 検索実行（Google CSE優先 → DuckDuckGoフォールバック） |
 | `scraper_agent.py` | 企業サイトのスクレイピング（会社名・電話・住所・従業員数・業種を抽出） |
@@ -41,13 +42,42 @@ PR媒体クエリ経由・健康経営認定リスト経由は +2点ボーナス
 ## feedback_learner.py の設計
 
 ### 学習フロー
-1. `call_list.csv` → アポ獲得○・見込みA = 成功 / NG系 = 失敗
-2. `meetings.csv` → 契約=はい = 成約（+2重みカウント）
-3. `results.csv` の備考欄でシグナルキーを抽出（会社名正規化で突合）
-4. シグナルごとの成功率 → 旧値70% + 新値30% ブレンドでウェイト更新
+1. call_list.csv・meetings.csv の会社名を収集
+2. **`supplement_agent.supplement_results_csv()` を呼び出し**、results.csv に未登録の企業を自動補完（最大20社）
+3. `call_list.csv` → アポ獲得○・見込みA = 成功 / NG系 = 失敗
+4. `meetings.csv` → 契約=はい = 成約（+2重みカウント）
+5. `results.csv` の備考欄でシグナルキーを抽出（会社名正規化で突合）
+6. シグナルごとの成功率 → 旧値70% + 新値30% ブレンドでウェイト更新
+
+### meetings.csv のカラム定義（重要）
+- 会社名キーは **「会社名」**（旧「企業名」は廃止）
+- **「契約」列が必須**（受注時に「はい」を自動セット）
+- `load_meetings()` が旧「企業名」列を「会社名」に自動マイグレーションする
 
 ### 会社名正規化（`_normalize_name`）
 法人格除去 → NFKC正規化 → 小文字化 → 記号除去。4文字以上なら部分一致も試みる。
+
+## supplement_agent.py の設計
+
+### 目的
+リストアップ以外のルート（過去商談インポート・手入力）で登録された会社が results.csv にない場合、学習が0になる問題を解消する。
+
+### 呼び出しタイミング
+| 呼び出し元 | タイミング | 最大件数 |
+|---|---|---|
+| `feedback_learner.run_learning()` | 「学習を実行」ボタン押下時 | 20社 |
+| `app.py` 商談インポートタブ | CSVインポート完了直後 | 50社 |
+
+### 処理フロー
+1. 既存 results.csv の会社名を正規化してセット化
+2. 引数の会社名リストから未登録分のみ抽出
+3. 各社: `list_page_agent.search_company_hp()` → `scraper_agent.scrape_company_info()` → `rank_agent.evaluate_rank()`
+4. 備考列に `"理由: シグナル名1, シグナル名2"` 形式で記録（`_extract_signals_from_reasons` が読める形式）
+5. results.csv に追記
+
+### 注意
+- 1社あたり約2秒のスリープ（DuckDuckGoレート制限対策）
+- エラーが出た社はスキップして続行（全体を止めない）
 
 ## monitor_agent.py のチェック項目
 
