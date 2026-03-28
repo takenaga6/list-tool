@@ -144,6 +144,22 @@ def run_learning() -> dict:
     if not call_list and not meetings:
         return {"signal_updates": {}, "stats": {}, "summary": ["データなし（call_list.csvもmeetings.csvも空）"]}
 
+    # ── results.csv 未登録企業を自動補完（スクレイピング）──────
+    try:
+        _all_names = list({
+            (row.get("会社名") or "").strip()
+            for row in (call_list + meetings)
+            if (row.get("会社名") or "").strip()
+        })
+        if _all_names:
+            from agents.supplement_agent import supplement_results_csv
+            _added = supplement_results_csv(_all_names, max_companies=20)
+            if _added > 0:
+                logger.info(f"results.csv に {_added}社を自動補完しました")
+                results = _load_csv(RESULTS_FILE)  # 補完後に再読み込み
+    except Exception as _sup_e:
+        logger.warning(f"自動補完をスキップ: {_sup_e}")
+
     # ── results.csv から シグナルマップ構築 ──────────────────────
     signal_map = _build_company_signal_map(results)
 

@@ -2774,7 +2774,7 @@ with tab_meeting:
                         "アポ獲得月":      _mi_v(row, mi_c_month),
                         "アポ獲得者":      _mi_v(row, mi_c_getter),
                         "リストアップ":    _mi_v(row, mi_c_listup),
-                        "企業名":          company,
+                        "会社名":          company,
                         "アポ獲得概要":    _mi_v(row, mi_c_summary),
                         "アポ担当":        _mi_v(row, mi_c_tanto),
                         "前確認実施済":    _mi_v(row, mi_c_precheck),
@@ -2803,9 +2803,9 @@ with tab_meeting:
                 os.makedirs(OUTPUT_DIR, exist_ok=True)
                 if mi_overwrite.startswith("追加"):
                     existing_mi = load_meetings()
-                    if not existing_mi.empty and "企業名" in existing_mi.columns:
-                        existing_companies = set(existing_mi["企業名"].dropna().tolist())
-                        new_mi_df = new_mi_df[~new_mi_df["企業名"].isin(existing_companies)]
+                    if not existing_mi.empty and "会社名" in existing_mi.columns:
+                        existing_companies = set(existing_mi["会社名"].dropna().tolist())
+                        new_mi_df = new_mi_df[~new_mi_df["会社名"].isin(existing_companies)]
                     mode = "a"
                     header = not os.path.exists(MEETINGS_FILE) or os.path.getsize(MEETINGS_FILE) == 0
                 else:
@@ -2813,6 +2813,19 @@ with tab_meeting:
                     header = True
 
                 new_mi_df.to_csv(MEETINGS_FILE, mode=mode, index=False, encoding="utf-8-sig", header=header)
+
+                # インポートした会社を results.csv に自動補完（未登録分のみスクレイピング）
+                _mi_names = [r.get("会社名", "") for r in new_mi_rows if r.get("会社名")]
+                if _mi_names:
+                    try:
+                        from agents.supplement_agent import supplement_results_csv
+                        with st.spinner(f"企業情報をスクレイピング中（{len(_mi_names)}社）..."):
+                            _mi_added = supplement_results_csv(_mi_names, max_companies=50)
+                        if _mi_added > 0:
+                            st.info(f"📊 リストアップ情報を {_mi_added}社 補完しました（学習精度が向上します）")
+                    except Exception as _mi_sup_e:
+                        st.caption(f"補完スクレイピングをスキップ: {_mi_sup_e}")
+
                 _save_import_settings("meeting_import", {
                     "filepath": mi_filepath_val if mi_src_mode.startswith("📂") else "",
                     "mapping": {
