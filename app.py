@@ -315,7 +315,7 @@ else:
 """, unsafe_allow_html=True)
 
 tab_calllist, tab_kaiden_zumi, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting, tab_monitor = st.tabs(
-    ["架電先リスト", "架電済みリスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断"]
+    ["架電先リスト", "見込みリスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断"]
 )
 
 
@@ -1111,43 +1111,62 @@ _df_call_list = load_call_list()
 
 
 # ──────────────────────────────
-# TAB: 架電済みリスト
-# 次回アプローチ日が過去になった企業を日程近い順に表示する
+# TAB: 見込みリスト
+# 次回アプローチ日が過去になった企業を「日程近い順 × リストランク」で表示する
 # ──────────────────────────────
 with tab_kaiden_zumi:
-    st.subheader("架電済みリスト")
-    st.caption("次回アプローチ日が過ぎた企業を近い順に表示します。架電担当者を変更して記録できます。")
+    st.subheader("見込みリスト")
+    st.caption("次回アプローチ日が過ぎた企業を表示します。日程が近い順 × ランク（A→B→C）で並べています。")
 
     from datetime import date as _kz_date
     _kz_today = str(_kz_date.today())
 
     _kz_df = _df_call_list.copy()
 
-    # 次回アプローチ日が空でなく、今日より前（過去）のものを抽出
+    # 次回アプローチ日が空でなく、今日以前のものを抽出
     _kz_mask = (
         (_kz_df["次回アプローチ日"] != "") &
         (_kz_df["次回アプローチ日"] <= _kz_today)
     )
     _kz_list = _kz_df[_kz_mask].copy()
-    _kz_list = _kz_list.sort_values("次回アプローチ日", ascending=True).reset_index(drop=True)
+
+    # ランクを数値に変換してソートキーに使う（A=1, B=2, C=3, その他=4）
+    _RANK_ORDER = {"A": 1, "B": 2, "C": 3}
+    _kz_list["_rank_order"] = (
+        _kz_list["リストランク"].str.upper().map(_RANK_ORDER).fillna(4).astype(int)
+    )
+    # 次回アプローチ日（近い順）→ ランク（A優先）の2段ソート
+    _kz_list = (
+        _kz_list
+        .sort_values(["次回アプローチ日", "_rank_order"], ascending=[True, True])
+        .drop(columns=["_rank_order"])
+        .reset_index(drop=True)
+    )
 
     if _kz_list.empty:
         st.info("次回アプローチ日が過ぎた企業はありません。")
     else:
-        st.markdown(f"**{len(_kz_list)}件** が対象です。")
+        # ── フィルター行（担当者・会社名検索）──
+        _kz_f1, _kz_f2 = st.columns([1, 2])
+        with _kz_f1:
+            _kz_persons = ["全員"] + sorted(
+                _kz_list["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()
+            )
+            _kz_filt = st.selectbox("架電担当者名", _kz_persons, key="kz_filt_person")
+        with _kz_f2:
+            _kz_search = st.text_input("会社名で検索", placeholder="例: 株式会社〇〇", key="kz_search")
 
-        # ── 担当者絞り込み ──
-        _kz_persons = ["全員"] + sorted(
-            _kz_list["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()
-        )
-        _kz_filt = st.selectbox("架電担当者名で絞り込み", _kz_persons, key="kz_filt_person")
         if _kz_filt != "全員":
             _kz_list = _kz_list[_kz_list["架電担当者名"] == _kz_filt]
+        if _kz_search:
+            _kz_list = _kz_list[_kz_list["会社名"].str.contains(_kz_search, na=False)]
 
-        # ── テーブル表示 ──
+        st.caption(f"**{len(_kz_list)}件** 表示中")
+
+        # ── テーブル表示（ランク・日程が一目でわかる列順）──
         _kz_show_cols = [
-            "次回アプローチ日", "会社名", "電話番号", "架電担当者名",
-            "アプローチ内容", "見込み", "アプローチ備考", "リストランク",
+            "リストランク", "次回アプローチ日", "会社名", "電話番号",
+            "架電担当者名", "見込み", "アプローチ内容", "アプローチ備考",
         ]
         st.dataframe(
             _kz_list[[c for c in _kz_show_cols if c in _kz_list.columns]],
@@ -1158,7 +1177,7 @@ with tab_kaiden_zumi:
         st.divider()
         st.markdown("#### 架電記録（担当者変更・結果入力）")
 
-        # ── 会社選択 ──
+        # ── 会社選択（表示順のまま選べるように）──
         _kz_company_options = _kz_list["会社名"].tolist()
         _kz_selected = st.selectbox("会社を選択", _kz_company_options, key="kz_company_select")
 
