@@ -986,7 +986,7 @@ def _show_pending_review_ui():
 
     edited = st.data_editor(
         df_view,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "承認":       st.column_config.CheckboxColumn("承認", default=True, width="small"),
@@ -1007,7 +1007,7 @@ def _show_pending_review_ui():
 
     col_save, col_clear = st.columns([1, 1])
     with col_save:
-        if st.button("承認した企業を保存", type="primary", use_container_width=True):
+        if st.button("承認した企業を保存", type="primary", width="stretch"):
             # 承認した企業を approved_companies.csv に追記
             approved_csv = os.path.join(_LIST_TOOL_DIR_local, "output", "approved_companies.csv")
             header = not os.path.exists(approved_csv)
@@ -1019,7 +1019,7 @@ def _show_pending_review_ui():
             st.success(f"{len(approved)}件を approved_companies.csv に保存しました。残り: {len(rejected)}件")
             st.rerun()
     with col_clear:
-        if st.button("クリア（リストを消去）", use_container_width=True):
+        if st.button("クリア（リストを消去）", width="stretch"):
             os.remove(pending_path)
             st.rerun()
 
@@ -1170,7 +1170,7 @@ with tab_kaiden_zumi:
         ]
         st.dataframe(
             _kz_list[[c for c in _kz_show_cols if c in _kz_list.columns]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1299,7 +1299,7 @@ with tab_history:
             filtered.sort_values("記録日", ascending=False).rename(
                 columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1359,7 +1359,7 @@ with tab_analysis:
                     _tanto_summary["商談数"] = _tanto_summary["商談数"].astype(int)
                     _tanto_summary["契約数"] = _tanto_summary["契約数"].astype(int)
 
-                st.dataframe(_tanto_summary, use_container_width=True, hide_index=True)
+                st.dataframe(_tanto_summary, width="stretch", hide_index=True)
 
                 # 担当者別架電数グラフ
                 _tanto_chart = alt.Chart(_tanto_summary).mark_bar(color="#4C78A8").encode(
@@ -1367,7 +1367,7 @@ with tab_analysis:
                     y=alt.Y("架電数:Q"),
                     tooltip=["担当名", "架電数", "アポ数", "アポ率(%)"],
                 ).properties(height=220, title="担当者別 架電数")
-                st.altair_chart(_tanto_chart, use_container_width=True)
+                st.altair_chart(_tanto_chart, width="stretch")
 
     # ── 架電ダッシュボード ─────────────────────────────────────────
     with dash_call:
@@ -1401,7 +1401,7 @@ with tab_analysis:
                     y=alt.Y("件数:Q"),
                     tooltip=["結果", "件数"],
                 ).properties(height=250)
-                st.altair_chart(chart_r, use_container_width=True)
+                st.altair_chart(chart_r, width="stretch")
 
             with col_g2:
                 st.markdown("**断り理由の内訳**")
@@ -1414,7 +1414,7 @@ with tab_analysis:
                         y=alt.Y("件数:Q"),
                         tooltip=["理由", "件数"],
                     ).properties(height=250)
-                    st.altair_chart(chart_rej, use_container_width=True)
+                    st.altair_chart(chart_rej, width="stretch")
                 else:
                     st.caption("断りデータなし")
 
@@ -1505,7 +1505,7 @@ with tab_analysis:
                                 y=alt.Y("アポ率(%):Q"),
                                 tooltip=["ランク", "アポ率(%)"],
                             ).properties(height=200)
-                            st.altair_chart(chart_rank, use_container_width=True)
+                            st.altair_chart(chart_rank, width="stretch")
 
                 # シグナル別アポ率
                 if signal_stats:
@@ -1518,7 +1518,7 @@ with tab_analysis:
                         st.markdown("**シグナル別アポ率（3件以上）**")
                         sig_df = pd.DataFrame(sig_rates, columns=["シグナル", "アポ率(%)", "アポ数", "件数"])
                         sig_df["アポ率(%)"] = sig_df["アポ率(%)"].round(1)
-                        st.dataframe(sig_df, use_container_width=True, hide_index=True)
+                        st.dataframe(sig_df, width="stretch", hide_index=True)
 
                         # 低効果シグナルの警告
                         low = sig_df[sig_df["アポ率(%)"] < 10]
@@ -1541,7 +1541,7 @@ with tab_analysis:
                     warm[["記録日", "会社名", "アプローチ結果", "温度感", "断り理由", "反応が良かったポイント", "メモ"]].rename(
                         columns={"温度感": "見込みランク", "アプローチ結果": "架電結果"}
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -1553,7 +1553,7 @@ with tab_analysis:
             if not apo_df.empty:
                 st.dataframe(
                     apo_df[["記録日", "会社名", "反応が良かったポイント", "メモ"]],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -1572,14 +1572,14 @@ with tab_analysis:
                     _tanto_fb_grp["アポ率(%)"] = (_tanto_fb_grp["アポ数"] / _tanto_fb_grp["架電数"] * 100).round(1)
                     _tc1, _tc2 = st.columns(2)
                     with _tc1:
-                        st.dataframe(_tanto_fb_grp, use_container_width=True, hide_index=True)
+                        st.dataframe(_tanto_fb_grp, width="stretch", hide_index=True)
                     with _tc2:
                         _tanto_chart2 = alt.Chart(_tanto_fb_grp).mark_bar(color="#54A24B").encode(
                             x=alt.X("担当名:N", axis=alt.Axis(labelAngle=0, labelFontSize=13)),
                             y=alt.Y("アポ率(%):Q"),
                             tooltip=["担当名", "架電数", "アポ数", "アポ率(%)"],
                         ).properties(height=200)
-                        st.altair_chart(_tanto_chart2, use_container_width=True)
+                        st.altair_chart(_tanto_chart2, width="stretch")
 
     # ── 商談ダッシュボード ─────────────────────────────────────────
     with dash_meeting:
@@ -1611,7 +1611,7 @@ with tab_analysis:
                     y=alt.Y("件数:Q"),
                     tooltip=[_ph_col, "件数"],
                 ).properties(height=250)
-                st.altair_chart(_chart_ph, use_container_width=True)
+                st.altair_chart(_chart_ph, width="stretch")
             with _mdc2:
                 st.markdown("**商談結果の内訳**")
                 _mr_df = _df_mt_dash2["商談結果"].value_counts().reset_index()
@@ -1621,7 +1621,7 @@ with tab_analysis:
                     y=alt.Y("件数:Q"),
                     tooltip=["商談結果", "件数"],
                 ).properties(height=250)
-                st.altair_chart(_chart_mr2, use_container_width=True)
+                st.altair_chart(_chart_mr2, width="stretch")
 
             # 担当者別成約率
             if "担当名" in _df_mt_dash2.columns:
@@ -1634,7 +1634,7 @@ with tab_analysis:
                         契約数=("契約", lambda x: (x == "はい").sum()),
                     ).reset_index()
                     _mt_grp["成約率(%)"] = (_mt_grp["契約数"] / _mt_grp["商談数"] * 100).round(1)
-                    st.dataframe(_mt_grp, use_container_width=True, hide_index=True)
+                    st.dataframe(_mt_grp, width="stretch", hide_index=True)
 
             # 次のアクションが必要な案件
             st.divider()
@@ -1648,7 +1648,7 @@ with tab_analysis:
                 _action_needed = _action_needed.sort_values(_sort_col, ascending=False)
             if not _action_needed.empty:
                 _show_mt_cols = [c for c in ["記録日", "会社名", "アポ担当", "商談結果", "アプローチ内容", "次回アプローチ日"] if c in _action_needed.columns]
-                st.dataframe(_action_needed[_show_mt_cols], use_container_width=True, hide_index=True)
+                st.dataframe(_action_needed[_show_mt_cols], width="stretch", hide_index=True)
             else:
                 st.caption("対象なし")
 
@@ -1692,7 +1692,7 @@ with tab_import:
                 ).fillna("")
 
                 st.markdown(f"**読み込み: {len(df_raw)}行 / {len(df_raw.columns)}列**")
-                st.dataframe(df_raw.head(5), use_container_width=True, hide_index=True)
+                st.dataframe(df_raw.head(5), width="stretch", hide_index=True)
 
                 st.divider()
                 st.markdown("### 列マッピング設定")
@@ -1762,7 +1762,7 @@ with tab_import:
 
                 st.markdown(f"**変換プレビュー（先頭5件）**  ※合計 {len(preview_rows)} 件")
                 if preview_rows:
-                    st.dataframe(pd.DataFrame(preview_rows[:5]), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(preview_rows[:5]), width="stretch", hide_index=True)
 
                     # リスト課題のサマリー表示
                     if col_memo != "（使わない）" and col_memo in df_raw.columns:
@@ -1860,7 +1860,7 @@ with tab_listup:
                                 "アポ率": f"{upd['apo_rate']:.0%}",
                                 "サンプル数": upd["samples"],
                             })
-                        st.dataframe(_fl_pd.DataFrame(_fl_rows), use_container_width=True, hide_index=True)
+                        st.dataframe(_fl_pd.DataFrame(_fl_rows), width="stretch", hide_index=True)
                     if _fl_stats.get("unmatched", 0) > 0:
                         st.caption(f"※ {_fl_stats['unmatched']}社はresults.csvと突合できませんでした（リストアップ前の手動インポート分など）")
                     # rank_agentのウェイトキャッシュをリロード
@@ -1939,7 +1939,7 @@ with tab_listup:
 
     run_col, status_col = st.columns([1, 3])
     with run_col:
-        run_btn = st.button("🚀 リストアップ開始", type="primary", use_container_width=True)
+        run_btn = st.button("🚀 リストアップ開始", type="primary", width="stretch")
 
     if run_btn:
         keywords  = [k.strip() for k in keywords_input.splitlines() if k.strip()]
@@ -2199,7 +2199,7 @@ with tab_calllist:
 
             edited_cl = st.data_editor(
                 _display_cl,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config=_column_config,
                 key="cl_data_editor",
@@ -2382,7 +2382,7 @@ with tab_calllist:
                 )
             with hs_list_col2:
                 st.markdown("　")
-                _load_lists_btn = st.button("🔄 更新", key="hs_load_lists", use_container_width=True)
+                _load_lists_btn = st.button("🔄 更新", key="hs_load_lists", width="stretch")
 
             if _load_lists_btn:
                 with st.spinner("取得中..."):
@@ -2400,7 +2400,7 @@ with tab_calllist:
                 hs_overwrite = st.radio("取り込みモード", ["追加（既存に追加）", "上書き（全て置き換え）"], horizontal=True, key="hs_overwrite")
             with hs_col2:
                 st.markdown("　")
-                hs_btn = st.button("📥 HubSpotから取得", type="primary", key="hs_fetch_btn", use_container_width=True)
+                hs_btn = st.button("📥 HubSpotから取得", type="primary", key="hs_fetch_btn", width="stretch")
 
             # 選択リストIDを解析
             _selected_list_id = None
@@ -2523,7 +2523,7 @@ with tab_calllist:
 
                             _hs_df = pd.DataFrame(_hs_rows)
                             st.success(f"✅ {len(_hs_df)}件取得しました")
-                            st.dataframe(_hs_df.head(5), use_container_width=True, hide_index=True)
+                            st.dataframe(_hs_df.head(5), width="stretch", hide_index=True)
 
                             os.makedirs(OUTPUT_DIR, exist_ok=True)
                             if hs_overwrite.startswith("追加"):
@@ -2594,7 +2594,7 @@ with tab_calllist:
 
         if cl_df_raw is not None:
             st.markdown(f"**読み込み: {len(cl_df_raw)}行 / {len(cl_df_raw.columns)}列**")
-            st.dataframe(cl_df_raw.head(3), use_container_width=True, hide_index=True)
+            st.dataframe(cl_df_raw.head(3), width="stretch", hide_index=True)
 
             st.markdown("### 列マッピング")
             cl_all_cols = ["（使わない）"] + cl_df_raw.columns.tolist()
@@ -3054,12 +3054,12 @@ with tab_meeting:
             ] if c in filtered_mt.columns]
             st.dataframe(
                 filtered_mt[_mt_show_cols].sort_values("記録日", ascending=False),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
             with st.expander("全列表示"):
-                st.dataframe(filtered_mt.sort_values("記録日", ascending=False), use_container_width=True, hide_index=True)
+                st.dataframe(filtered_mt.sort_values("記録日", ascending=False), width="stretch", hide_index=True)
 
             csv_mt = filtered_mt.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button("📥 CSVダウンロード", data=csv_mt, file_name="meetings_export.csv", mime="text/csv", key="mt_dl")
@@ -3092,7 +3092,7 @@ with tab_meeting:
                     y=alt.Y("件数:Q"),
                     tooltip=["商談結果", "件数"],
                 ).properties(height=250)
-                st.altair_chart(chart_mr, use_container_width=True)
+                st.altair_chart(chart_mr, width="stretch")
             with col_p2:
                 st.markdown("**見込み別件数**")
                 _mk_df = df_mt["見込み"].replace("", "未記入").value_counts().reset_index()
@@ -3102,7 +3102,7 @@ with tab_meeting:
                     y=alt.Y("件数:Q"),
                     tooltip=["見込み", "件数"],
                 ).properties(height=250)
-                st.altair_chart(chart_mk, use_container_width=True)
+                st.altair_chart(chart_mk, width="stretch")
 
             # 次回アプローチ要対応一覧
             st.divider()
@@ -3114,7 +3114,7 @@ with tab_meeting:
             if not _action_df.empty:
                 st.dataframe(
                     _action_df[[c for c in ["企業名", "アポ実施担当者", "商談結果", "見込み", "次回アプローチ日", "アプローチ内容"] if c in _action_df.columns]],
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
             else:
                 st.caption("対象なし")
@@ -3168,7 +3168,7 @@ with tab_meeting:
 
         if mi_df_raw is not None:
             st.markdown(f"**読み込み: {len(mi_df_raw)}行 / {len(mi_df_raw.columns)}列**")
-            st.dataframe(mi_df_raw.head(3), use_container_width=True, hide_index=True)
+            st.dataframe(mi_df_raw.head(3), width="stretch", hide_index=True)
 
             st.markdown("### 列マッピング")
             mi_all_cols = ["（使わない）"] + mi_df_raw.columns.tolist()
@@ -3406,7 +3406,7 @@ with tab_monitor:
             )
         with _mon_col2:
             st.markdown("　")
-            if st.button("🔄 リスト更新", key="mon_refresh_lists", use_container_width=True):
+            if st.button("🔄 リスト更新", key="mon_refresh_lists", width="stretch"):
                 del st.session_state["mon_hs_lists_cache"]
                 st.rerun()
 
@@ -3491,7 +3491,7 @@ with tab_user_fb:
         st.caption("ステータスはここで直接変更できます。変更後「保存」を押してください。")
         _uf_edited = st.data_editor(
             _uf_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             num_rows="dynamic",
             column_config={
