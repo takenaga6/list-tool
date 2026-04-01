@@ -2010,6 +2010,7 @@ with tab_listup:
 
             st.info(f"実行コマンド: `{' '.join(cmd)}`")
 
+            _lu_should_rerun = False
             try:
                 _env = os.environ.copy()
                 _env["PYTHONIOENCODING"] = "utf-8"
@@ -2033,9 +2034,11 @@ with tab_listup:
                     "running": True, "done": False, "return_code": None,
                 })
                 _thr.Thread(target=_listup_reader_thread, args=(_lu_proc,), daemon=True).start()
-                st.rerun()
+                _lu_should_rerun = True
             except Exception as _lu_e:
                 st.error(f"実行エラー: {_lu_e}")
+            if _lu_should_rerun:
+                st.rerun()
 
     # ── 実行中・完了時の出力表示（2秒ごとに自動更新）──────────────
     if _LISTUP_STATE["running"] or _LISTUP_STATE["done"]:
