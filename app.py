@@ -594,6 +594,12 @@ def _auto_refill_from_hubspot(tanto_name: str) -> tuple[int, str | None]:
     if not selected:
         return 0, None
 
+    # チームメンバーが登録されていればラウンドロビンで担当者を割り当て
+    # 未登録の場合はトリガーした担当者名（tanto_name）がそのまま入っている
+    _team = _load_team_members()
+    if _team:
+        selected = _assign_members_roundrobin(selected, _team)
+
     # call_list.csvに追記
     _new_df = pd.DataFrame(selected)
     # 全カラム揃える
@@ -862,6 +868,33 @@ def _save_import_settings(key: str, data: dict):
             _json_mod.dump(all_settings, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def _load_team_members() -> list[str]:
+    """登録済みチームメンバー名のリストを返す"""
+    return _load_import_settings("team_members").get("names", [])
+
+
+def _save_team_members(names: list[str]) -> None:
+    """チームメンバー名のリストを保存する"""
+    _save_import_settings("team_members", {"names": names})
+
+
+def _assign_members_roundrobin(entries: list[dict], members: list[str]) -> list[dict]:
+    """
+    entriesの各行にメンバーをラウンドロビンで架電担当者名として割り当てる。
+    割り当て開始位置はimport_settings.jsonに記録し、次回はその続きから始める。
+    """
+    if not members or not entries:
+        return entries
+    # 前回の終了インデックスを読み込む（続きから割り当てるため）
+    start_idx = _load_import_settings("team_members_rr").get("next_idx", 0) % len(members)
+    for i, entry in enumerate(entries):
+        entry["架電担当者名"] = members[(start_idx + i) % len(members)]
+    # 次回の開始インデックスを保存
+    next_idx = (start_idx + len(entries)) % len(members)
+    _save_import_settings("team_members_rr", {"next_idx": next_idx})
+    return entries
 
 
 def _read_file_to_df(filepath: str) -> pd.DataFrame | None:
@@ -3346,6 +3379,45 @@ with tab_monitor:
             st.markdown("**自動修復した項目:**")
             for _r in _mr["repairs"]:
                 st.markdown(f"- {_r}")
+
+    # ── チームメンバー設定 ────────────────────────────────────────
+    st.divider()
+    st.markdown("#### チームメンバー設定（架電担当者の自動割り振り）")
+    st.caption("登録したメンバーに、HubSpot自動補充の新規リストをラウンドロビンで割り当てます。未登録の場合はトリガーした担当者に全件割り当てられます。")
+
+    _tm_current = _load_team_members()
+
+    # 現在のメンバー表示 & 削除
+    if _tm_current:
+        st.markdown("**登録済みメンバー：**")
+        for _tm_name in _tm_current:
+            _tm_col_name, _tm_col_del = st.columns([4, 1])
+            with _tm_col_name:
+                st.markdown(f"・{_tm_name}")
+            with _tm_col_del:
+                if st.button("削除", key=f"tm_del_{_tm_name}"):
+                    _tm_new = [n for n in _tm_current if n != _tm_name]
+                    _save_team_members(_tm_new)
+                    st.rerun()
+    else:
+        st.caption("メンバーが登録されていません。")
+
+    # 新規メンバー追加
+    _tm_add_col, _tm_btn_col = st.columns([3, 1])
+    with _tm_add_col:
+        _tm_new_name = st.text_input("メンバー名を追加", placeholder="例: 野村", key="tm_new_name")
+    with _tm_btn_col:
+        st.markdown("　")
+        if st.button("追加", type="primary", key="tm_add_btn"):
+            _tm_new_name_stripped = _tm_new_name.strip()
+            if _tm_new_name_stripped and _tm_new_name_stripped not in _tm_current:
+                _save_team_members(_tm_current + [_tm_new_name_stripped])
+                st.success(f"「{_tm_new_name_stripped}」を追加しました。")
+                st.rerun()
+            elif _tm_new_name_stripped in _tm_current:
+                st.warning("すでに登録されています。")
+            else:
+                st.warning("名前を入力してください。")
 
     # ── 自動補充リスト設定 ────────────────────────────────────────
     st.divider()
