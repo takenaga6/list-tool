@@ -12,7 +12,7 @@ import altair as alt
 
 import io as _io_mod
 import json as _json_mod
-from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, IMPORT_SETTINGS_FILE, OUTPUT_DIR, record_feedback, record_meeting
+from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, IMPORT_SETTINGS_FILE, USER_FEEDBACK_FILE, OUTPUT_DIR, record_feedback, record_meeting
 
 _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -314,8 +314,8 @@ else:
 </div>
 """, unsafe_allow_html=True)
 
-tab_calllist, tab_kaiden_zumi, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting, tab_monitor = st.tabs(
-    ["架電先リスト", "見込みリスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断"]
+tab_calllist, tab_kaiden_zumi, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting, tab_monitor, tab_user_fb = st.tabs(
+    ["架電先リスト", "見込みリスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断", "利用者フィードバック"]
 )
 
 
@@ -3426,4 +3426,84 @@ with tab_monitor:
                 _save_lname = _mon_selected.split("  [")[0].strip()
                 _save_import_settings("auto_refill_list", {"list_id": _save_lid, "list_name": _save_lname})
                 st.success(f"設定を保存しました → **{_save_lname}** から補充します")
+            st.rerun()
+
+
+# ──────────────────────────────
+# TAB: 利用者フィードバック
+# ──────────────────────────────
+with tab_user_fb:
+    st.subheader("利用者フィードバック")
+    st.caption("ツールへの要望・バグ報告・改善提案などを自由にメモしてください。")
+
+    _UF_COLS = ["日付", "投稿者", "カテゴリ", "内容", "ステータス"]
+    _UF_CATEGORIES = ["機能要望", "バグ報告", "改善提案", "使い方質問", "その他"]
+    _UF_STATUSES   = ["未対応", "確認中", "対応済み"]
+
+    def _load_user_feedback() -> pd.DataFrame:
+        if os.path.exists(USER_FEEDBACK_FILE):
+            try:
+                df = pd.read_csv(USER_FEEDBACK_FILE, encoding="utf-8-sig", dtype=str).fillna("")
+                for c in _UF_COLS:
+                    if c not in df.columns:
+                        df[c] = ""
+                return df[_UF_COLS]
+            except Exception:
+                pass
+        return pd.DataFrame(columns=_UF_COLS)
+
+    def _save_user_feedback(df: pd.DataFrame) -> None:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        df.to_csv(USER_FEEDBACK_FILE, index=False, encoding="utf-8-sig")
+
+    _uf_df = _load_user_feedback()
+
+    # ── 新規投稿フォーム ──
+    with st.expander("＋ 新しいフィードバックを投稿", expanded=_uf_df.empty):
+        from datetime import date as _uf_date
+        _uf_c1, _uf_c2 = st.columns(2)
+        with _uf_c1:
+            _uf_author   = st.text_input("投稿者名", placeholder="例: 野村", key="uf_author")
+            _uf_category = st.selectbox("カテゴリ", _UF_CATEGORIES, key="uf_category")
+        with _uf_c2:
+            _uf_content = st.text_area("内容", placeholder="例: 〇〇タブで△△すると…", height=100, key="uf_content")
+
+        if st.button("投稿する", type="primary", key="uf_submit"):
+            if not _uf_content.strip():
+                st.warning("内容を入力してください。")
+            else:
+                _new_row = pd.DataFrame([{
+                    "日付":     str(_uf_date.today()),
+                    "投稿者":   _uf_author.strip(),
+                    "カテゴリ": _uf_category,
+                    "内容":     _uf_content.strip(),
+                    "ステータス": "未対応",
+                }])
+                _uf_df = pd.concat([_new_row, _uf_df], ignore_index=True)
+                _save_user_feedback(_uf_df)
+                st.success("投稿しました。")
+                st.rerun()
+
+    # ── 一覧（スプレッドシート形式で編集可能）──
+    if _uf_df.empty:
+        st.info("フィードバックはまだありません。上のフォームから投稿してください。")
+    else:
+        st.caption("ステータスはここで直接変更できます。変更後「保存」を押してください。")
+        _uf_edited = st.data_editor(
+            _uf_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            column_config={
+                "日付":     st.column_config.TextColumn("日付",     width="small"),
+                "投稿者":   st.column_config.TextColumn("投稿者",   width="small"),
+                "カテゴリ": st.column_config.SelectboxColumn("カテゴリ", options=_UF_CATEGORIES, width="medium"),
+                "内容":     st.column_config.TextColumn("内容",     width="large"),
+                "ステータス": st.column_config.SelectboxColumn("ステータス", options=_UF_STATUSES, width="small"),
+            },
+            key="uf_editor",
+        )
+        if st.button("💾 変更を保存", key="uf_save"):
+            _save_user_feedback(_uf_edited)
+            st.success("保存しました。")
             st.rerun()

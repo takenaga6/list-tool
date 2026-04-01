@@ -38,6 +38,7 @@ FEEDBACK_FILE = os.path.join(OUTPUT_DIR, "feedback.csv")                 # テ�
 MEETINGS_FILE = os.path.join(OUTPUT_DIR, "meetings.csv")                 # 商談記録
 CALL_LIST_FILE = os.path.join(OUTPUT_DIR, "call_list.csv")               # 架電先リスト
 IMPORT_SETTINGS_FILE = os.path.join(OUTPUT_DIR, "import_settings.json") # インポート設定の記憶
+USER_FEEDBACK_FILE   = os.path.join(OUTPUT_DIR, "user_feedback.csv")   # 利用者フィードバック
 
 # シグナルキー一覧（rank_agent / feedback_learner / monitor_agent で共有）
 SIGNAL_KEYS = [
