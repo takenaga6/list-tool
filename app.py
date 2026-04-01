@@ -17,16 +17,11 @@ from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, I
 _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # リストアップのバックグラウンド実行状態
-# Streamlitはapp.pyを毎回再実行するため、= {} で毎回リセットされないよう
-# 初回のみ初期化する（同一プロセス内でモジュールキャッシュが保持される）
-if "_LISTUP_STATE" not in globals():
-    _LISTUP_STATE: dict = {
-        "proc":        None,   # subprocess.Popen オブジェクト
-        "lines":       [],     # stdout バッファ
-        "running":     False,  # 実行中フラグ
-        "done":        False,  # 完了フラグ
-        "return_code": None,   # 終了コード
-    }
+# app.py は Streamlit により毎回再実行されるため、モジュールレベル変数は
+# 毎回リセットされる。listup_state.py を import することで状態を保持する
+# （import されたモジュールは Python の sys.modules キャッシュにより1回しか実行されない）
+import listup_state as _lu_state_mod
+_LISTUP_STATE = _lu_state_mod.STATE
 
 
 def _listup_reader_thread(proc: "subprocess.Popen[str]") -> None:
