@@ -2036,9 +2036,16 @@ with tab_listup:
                 _thr.Thread(target=_listup_reader_thread, args=(_lu_proc,), daemon=True).start()
                 _lu_should_rerun = True
             except Exception as _lu_e:
-                st.error(f"実行エラー: {_lu_e}")
+                st.session_state["_lu_last_error"] = str(_lu_e)
             if _lu_should_rerun:
                 st.rerun()
+
+    # Popen失敗エラーを session_state から表示（rerunで消えない）
+    if st.session_state.get("_lu_last_error"):
+        st.error(f"実行エラー: {st.session_state['_lu_last_error']}")
+        if st.button("エラーをクリア", key="lu_clear_err"):
+            del st.session_state["_lu_last_error"]
+            st.rerun()
 
     # ── 実行中・完了時の出力表示（2秒ごとに自動更新）──────────────
     if _LISTUP_STATE["running"] or _LISTUP_STATE["done"]:
@@ -2049,14 +2056,17 @@ with tab_listup:
         elif _LISTUP_STATE["done"]:
             if _LISTUP_STATE["return_code"] == 0:
                 st.success("✅ リストアップ完了！ 架電先リストに追加されました。")
-                if st.button("ログをクリア", key="lu_clear_log"):
-                    _LISTUP_STATE.update({"lines": [], "done": False, "return_code": None})
-                    st.rerun()
             else:
                 st.error(f"異常終了しました（終了コード: {_LISTUP_STATE['return_code']}）")
+            if st.button("ログをクリア", key="lu_clear_log"):
+                _LISTUP_STATE.update({"lines": [], "done": False, "return_code": None})
+                st.rerun()
 
+        # サブプロセスの出力（エラー詳細含む）を常に表示
         if _LISTUP_STATE["lines"]:
-            st.code("\n".join(_LISTUP_STATE["lines"][-100:]), language=None)
+            st.code("\n".join(_LISTUP_STATE["lines"][-200:]), language=None)
+        elif _LISTUP_STATE["done"] and _LISTUP_STATE["return_code"] != 0:
+            st.warning("サブプロセスの出力がありません。Renderログを確認してください。")
 
     # ── 前回の確認待ちが残っていれば常に表示 ──────────────────────
     _pending_path_check = os.path.join(OUTPUT_DIR, "pending_review.json")
