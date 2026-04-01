@@ -16,6 +16,27 @@ from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, I
 
 _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# リストアップのバックグラウンド実行状態（サーバー起動中に持続するモジュール変数）
+_LISTUP_STATE: dict = {
+    "proc":        None,   # subprocess.Popen オブジェクト
+    "lines":       [],     # stdout バッファ
+    "running":     False,  # 実行中フラグ
+    "done":        False,  # 完了フラグ
+    "return_code": None,   # 終了コード
+}
+
+
+def _listup_reader_thread(proc: "subprocess.Popen[str]") -> None:
+    """バックグラウンドスレッドでサブプロセスの stdout を読み込む"""
+    import subprocess as _sp
+    for _line in proc.stdout:
+        _LISTUP_STATE["lines"].append(_line.rstrip())
+    proc.wait()
+    _LISTUP_STATE["running"]     = False
+    _LISTUP_STATE["done"]        = True
+    _LISTUP_STATE["return_code"] = proc.returncode
+
+
 # ──────────────────────────────
 # ページ設定
 # ──────────────────────────────
@@ -293,8 +314,8 @@ else:
 </div>
 """, unsafe_allow_html=True)
 
-tab_calllist, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting, tab_monitor = st.tabs(
-    ["架電先リスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断"]
+tab_calllist, tab_kaiden_zumi, tab_pending, tab_history, tab_analysis, tab_import, tab_listup, tab_meeting, tab_monitor = st.tabs(
+    ["架電先リスト", "架電済みリスト", "確認待ち", "履歴", "ダッシュボード", "取り込み", "リストアップ", "商談一覧", "システム診断"]
 )
 
 
@@ -397,6 +418,194 @@ def update_call_list_row(company_name: str, update_data: dict):
 
     df.to_csv(CALL_LIST_FILE, index=False, encoding="utf-8-sig")
 
+
+def _auto_refill_from_hubspot(tanto_name: str) -> tuple[int, str | None]:
+    """
+    指定担当者のアプローチ内容ブランクが50件未満になったら、
+    HubSpotから100件（リストランクA/B/C均等）を自動追加する。
+    設定で特定リストIDが保存されていればそのリストから取得、なければ全企業が対象。
+    戻り値: (追加件数, エラーメッセージ or None)
+    """
+    from config import HUBSPOT_TOKEN
+    if not HUBSPOT_TOKEN or not tanto_name:
+        return 0, None
+
+    # 現在のcall_listをロードし、担当者のブランク件数をチェック
+    df_cl = load_call_list()
+    tanto_rows = df_cl[df_cl["架電担当者名"] == tanto_name]
+    blank_count = len(tanto_rows[tanto_rows["アプローチ内容"] == ""])
+    if blank_count >= 50:
+        return 0, None  # まだ十分あるので補充不要
+
+    # 既存のcall_listにある会社名セット（重複除外用）
+    existing_names = set(df_cl["会社名"].tolist())
+
+    # results.csvからランク情報を取得（会社名→ランクの辞書を作成）
+    rank_map: dict[str, str] = {}
+    if os.path.exists(RESULTS_FILE):
+        try:
+            df_results = pd.read_csv(RESULTS_FILE, encoding="utf-8-sig", dtype=str).fillna("")
+            rank_col = "ランク" if "ランク" in df_results.columns else "リストランク"
+            for _, row in df_results.iterrows():
+                _rname = str(row.get("会社名", "")).strip()
+                _rrank = str(row.get(rank_col, "")).strip().upper()
+                if _rname:
+                    rank_map[_rname] = _rrank
+        except Exception:
+            pass
+
+    # 自動補充対象リストIDを設定から取得（未設定なら全企業モード）
+    _refill_list_id = _load_import_settings("auto_refill_list").get("list_id", "")
+
+    import requests as _refill_req
+    _refill_headers = {
+        "Authorization": f"Bearer {HUBSPOT_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    _REFILL_PROPS = "name,phone,website,state,city,industry,numberofemployees,zip,joken_ng"
+    _hs_base = "https://api.hubapi.com"
+
+    # HubSpotオブジェクト → candidateエントリに変換するヘルパー
+    def _to_candidate(c: dict) -> dict | None:
+        _p = c.get("properties", {})
+        _name = (_p.get("name") or "").strip()
+        if not _name or _name in existing_names:
+            return None
+        return {
+            "hs_id":             c.get("id", ""),
+            "会社名":            _name,
+            "電話番号":          (_p.get("phone") or "").strip(),
+            "代表者":            "",
+            "HPリンク":          (_p.get("website") or "").strip(),
+            "説明リンク":        "",
+            "地域":              (_p.get("state") or _p.get("city") or "").strip(),
+            "業種":              (_p.get("industry") or "").strip(),
+            "従業員数":          (_p.get("numberofemployees") or "").strip(),
+            "リストランク":      rank_map.get(_name, ""),
+            "リストアップ担当者": "",
+            "条件NG":            "○" if (_p.get("joken_ng") or "").lower() in ("true", "1", "yes") else "",
+            "リストアップ更新日": "",
+            "架電担当者名":      tanto_name,
+            "パスアポ者名":      "",
+            "アポ獲得":          "",
+            "アプローチ内容":    "",
+            "見込み":            "",
+            "アプローチ日":      "",
+            "次回アプローチ日":  "",
+            "アプローチ備考":    "",
+        }
+
+    candidates: list[dict] = []
+    try:
+        if _refill_list_id:
+            # ── 特定リスト指定モード: メンバーIDを取得 → バッチで詳細取得 ──
+            _member_ids: list[str] = []
+            _list_after = None
+            while len(_member_ids) < 300:
+                _lm_params: dict = {"limit": min(250, 300 - len(_member_ids))}
+                if _list_after:
+                    _lm_params["after"] = _list_after
+                _lm_resp = _refill_req.get(
+                    f"{_hs_base}/crm/v3/lists/{_refill_list_id}/memberships/join-order",
+                    headers=_refill_headers,
+                    params=_lm_params,
+                    timeout=15,
+                )
+                if not _lm_resp.ok:
+                    return 0, f"リストメンバー取得エラー: {_lm_resp.status_code}"
+                _lm_data = _lm_resp.json()
+                _member_ids += [r["recordId"] for r in _lm_data.get("results", [])]
+                _list_after = _lm_data.get("paging", {}).get("next", {}).get("after")
+                if not _list_after:
+                    break
+            # バッチで企業詳細を取得（100件ずつ）
+            for _bi in range(0, len(_member_ids), 100):
+                _batch_ids = _member_ids[_bi:_bi + 100]
+                _br = _refill_req.post(
+                    f"{_hs_base}/crm/v3/objects/companies/batch/read",
+                    headers=_refill_headers,
+                    json={
+                        "inputs": [{"id": i} for i in _batch_ids],
+                        "properties": _REFILL_PROPS.split(","),
+                    },
+                    timeout=20,
+                )
+                if _br.ok:
+                    for _c in _br.json().get("results", []):
+                        _entry = _to_candidate(_c)
+                        if _entry:
+                            candidates.append(_entry)
+        else:
+            # ── 全企業モード: ページングで最大300件取得 ──
+            _after = None
+            while len(candidates) < 300:
+                _params: dict = {"limit": 100, "properties": _REFILL_PROPS}
+                if _after:
+                    _params["after"] = _after
+                _resp = _refill_req.get(
+                    f"{_hs_base}/crm/v3/objects/companies",
+                    headers=_refill_headers,
+                    params=_params,
+                    timeout=15,
+                )
+                if not _resp.ok:
+                    return 0, f"HubSpot APIエラー: {_resp.status_code}"
+                _data = _resp.json()
+                for _c in _data.get("results", []):
+                    _entry = _to_candidate(_c)
+                    if _entry:
+                        candidates.append(_entry)
+                _after = _data.get("paging", {}).get("next", {}).get("after")
+                if not _after:
+                    break
+    except Exception as _e:
+        return 0, str(_e)
+
+    if not candidates:
+        return 0, None
+
+    # A/B/C均等配分（各33件 → 合計99件、残り1枠はA優先で補完）
+    TARGET = 100
+    PER_RANK = TARGET // 3  # 33
+
+    buckets: dict[str, list[dict]] = {"A": [], "B": [], "C": [], "other": []}
+    for _cand in candidates:
+        _rank = _cand["リストランク"].upper()
+        if _rank in ("A", "B", "C"):
+            buckets[_rank].append(_cand)
+        else:
+            buckets["other"].append(_cand)
+
+    # 各ランクから33件ずつ選択
+    selected: list[dict] = []
+    for _r in ("A", "B", "C"):
+        selected.extend(buckets[_r][:PER_RANK])
+
+    # 100件に満たない場合はA/B/Cの余り→otherで補完
+    if len(selected) < TARGET:
+        _extra_pool: list[dict] = []
+        for _r in ("A", "B", "C"):
+            _extra_pool.extend(buckets[_r][PER_RANK:])
+        _extra_pool.extend(buckets["other"])
+        _shortage = TARGET - len(selected)
+        selected.extend(_extra_pool[:_shortage])
+
+    selected = selected[:TARGET]
+    if not selected:
+        return 0, None
+
+    # call_list.csvに追記
+    _new_df = pd.DataFrame(selected)
+    # 全カラム揃える
+    for _col in _CALL_LIST_COLS:
+        if _col not in _new_df.columns:
+            _new_df[_col] = ""
+    _new_df = _new_df[_CALL_LIST_COLS]
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    _header = not os.path.exists(CALL_LIST_FILE) or os.path.getsize(CALL_LIST_FILE) == 0
+    _new_df.to_csv(CALL_LIST_FILE, mode="a", index=False, encoding="utf-8-sig", header=_header)
+
+    return len(_new_df), None
 
 
 # 商談一覧 全カラム定義
@@ -892,6 +1101,130 @@ pip install gspread google-auth
         except Exception as e:
             st.error(f"接続エラー: {e}")
     return None
+
+
+# ──────────────────────────────
+# call_list.csv をスクリプト実行ごとに1回だけ読み込む
+# （全タブで使い回し、書き込み後は st.rerun() で再読み込みされる）
+# ──────────────────────────────
+_df_call_list = load_call_list()
+
+
+# ──────────────────────────────
+# TAB: 架電済みリスト
+# 次回アプローチ日が過去になった企業を日程近い順に表示する
+# ──────────────────────────────
+with tab_kaiden_zumi:
+    st.subheader("架電済みリスト")
+    st.caption("次回アプローチ日が過ぎた企業を近い順に表示します。架電担当者を変更して記録できます。")
+
+    from datetime import date as _kz_date
+    _kz_today = str(_kz_date.today())
+
+    _kz_df = _df_call_list.copy()
+
+    # 次回アプローチ日が空でなく、今日より前（過去）のものを抽出
+    _kz_mask = (
+        (_kz_df["次回アプローチ日"] != "") &
+        (_kz_df["次回アプローチ日"] <= _kz_today)
+    )
+    _kz_list = _kz_df[_kz_mask].copy()
+    _kz_list = _kz_list.sort_values("次回アプローチ日", ascending=True).reset_index(drop=True)
+
+    if _kz_list.empty:
+        st.info("次回アプローチ日が過ぎた企業はありません。")
+    else:
+        st.markdown(f"**{len(_kz_list)}件** が対象です。")
+
+        # ── 担当者絞り込み ──
+        _kz_persons = ["全員"] + sorted(
+            _kz_list["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()
+        )
+        _kz_filt = st.selectbox("架電担当者名で絞り込み", _kz_persons, key="kz_filt_person")
+        if _kz_filt != "全員":
+            _kz_list = _kz_list[_kz_list["架電担当者名"] == _kz_filt]
+
+        # ── テーブル表示 ──
+        _kz_show_cols = [
+            "次回アプローチ日", "会社名", "電話番号", "架電担当者名",
+            "アプローチ内容", "見込み", "アプローチ備考", "リストランク",
+        ]
+        st.dataframe(
+            _kz_list[[c for c in _kz_show_cols if c in _kz_list.columns]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.divider()
+        st.markdown("#### 架電記録（担当者変更・結果入力）")
+
+        # ── 会社選択 ──
+        _kz_company_options = _kz_list["会社名"].tolist()
+        _kz_selected = st.selectbox("会社を選択", _kz_company_options, key="kz_company_select")
+
+        if _kz_selected:
+            _kz_row = _kz_list[_kz_list["会社名"] == _kz_selected].iloc[0]
+
+            _kz_col1, _kz_col2 = st.columns(2)
+            with _kz_col1:
+                st.markdown(f"**電話番号:** {_kz_row.get('電話番号', '') or '―'}")
+                st.markdown(f"**リストランク:** {_kz_row.get('リストランク', '') or '―'}")
+                st.markdown(f"**前回アプローチ内容:** {_kz_row.get('アプローチ内容', '') or '―'}")
+            with _kz_col2:
+                st.markdown(f"**次回アプローチ日:** {_kz_row.get('次回アプローチ日', '') or '―'}")
+                st.markdown(f"**見込み:** {_kz_row.get('見込み', '') or '―'}")
+                st.markdown(f"**前回備考:** {_kz_row.get('アプローチ備考', '') or '―'}")
+
+            st.markdown("---")
+
+            # ── 入力フォーム ──
+            _kz_tanto = st.text_input(
+                "架電担当者名（変更可能）",
+                value=_kz_row.get("架電担当者名", ""),
+                key="kz_tanto",
+            )
+            _kz_result = st.selectbox(
+                "アプローチ内容（架電結果）",
+                options=_APPROACH_OPTIONS,
+                index=_APPROACH_OPTIONS.index(_kz_row.get("アプローチ内容", ""))
+                if _kz_row.get("アプローチ内容", "") in _APPROACH_OPTIONS else 0,
+                key="kz_result",
+            )
+            _kz_mikomi = st.selectbox(
+                "見込み",
+                options=["", "A", "B", "C", "D", "受注済み", "失注"],
+                index=["", "A", "B", "C", "D", "受注済み", "失注"].index(_kz_row.get("見込み", ""))
+                if _kz_row.get("見込み", "") in ["", "A", "B", "C", "D", "受注済み", "失注"] else 0,
+                key="kz_mikomi",
+            )
+            _kz_memo = st.text_area("備考", value=_kz_row.get("アプローチ備考", ""), height=70, key="kz_memo")
+            _kz_next_date = st.date_input("次回アプローチ日（任意）", value=None, key="kz_next_date")
+
+            if st.button("✅ 記録を更新する", type="primary", key="kz_submit"):
+                _kz_next_str = str(_kz_next_date) if _kz_next_date else ""
+                from datetime import date as _kz_today_d
+                update_call_list_row(_kz_selected, {
+                    "架電担当者名":    _kz_tanto,
+                    "アプローチ内容":  _kz_result,
+                    "見込み":         _kz_mikomi,
+                    "アプローチ備考":  _kz_memo,
+                    "アプローチ日":   str(_kz_today_d.today()),
+                    "次回アプローチ日": _kz_next_str,
+                })
+
+                # 担当者のブランク件数チェック → 50件未満なら自動補充
+                if _kz_tanto:
+                    with st.spinner(f"「{_kz_tanto}」のリスト残数を確認中..."):
+                        _kz_added, _kz_err = _auto_refill_from_hubspot(_kz_tanto)
+                    if _kz_err:
+                        st.warning(f"記録しました。自動補充エラー: {_kz_err}")
+                    elif _kz_added > 0:
+                        st.success(f"記録しました ✅ — 「{_kz_tanto}」のリスト残数が少ないため {_kz_added}件を自動補充しました")
+                    else:
+                        st.success(f"記録しました: **{_kz_selected}** — {_kz_result}")
+                else:
+                    st.success(f"記録しました: **{_kz_selected}** — {_kz_result}")
+                st.rerun()
 
 
 # ──────────────────────────────
@@ -1624,8 +1957,6 @@ with tab_listup:
             _lu_env_offset = str(_lu_offset)
 
             st.info(f"実行コマンド: `{' '.join(cmd)}`")
-            output_placeholder = st.empty()
-            lines: list[str] = []
 
             try:
                 _env = os.environ.copy()
@@ -1633,7 +1964,7 @@ with tab_listup:
                 _env["PYTHONUTF8"] = "1"
                 _env["LISTUP_WORKER_NAME"] = lu_worker_name or ""
                 _env["LISTUP_WORKER_OFFSET"] = _lu_env_offset
-                proc = subprocess.Popen(
+                _lu_proc = subprocess.Popen(
                     cmd,
                     cwd=_LIST_TOOL_DIR,
                     stdout=subprocess.PIPE,
@@ -1643,23 +1974,34 @@ with tab_listup:
                     errors="replace",
                     env=_env,
                 )
+                # バックグラウンドで起動し、スレッドで出力を読み込む
+                import threading as _thr
+                _LISTUP_STATE.update({
+                    "proc": _lu_proc, "lines": [],
+                    "running": True, "done": False, "return_code": None,
+                })
+                _thr.Thread(target=_listup_reader_thread, args=(_lu_proc,), daemon=True).start()
+                st.rerun()
+            except Exception as _lu_e:
+                st.error(f"実行エラー: {_lu_e}")
 
-                for raw_line in proc.stdout:
-                    lines.append(raw_line.rstrip())
-                    # 最新100行を表示
-                    output_placeholder.code("\n".join(lines[-100:]), language=None)
+    # ── 実行中・完了時の出力表示（2秒ごとに自動更新）──────────────
+    if _LISTUP_STATE["running"] or _LISTUP_STATE["done"]:
+        from streamlit_autorefresh import st_autorefresh as _lu_refresh
+        if _LISTUP_STATE["running"]:
+            _lu_refresh(interval=2000, key="listup_autorefresh")
+            st.info("🔄 リストアップ実行中… 画面は2秒ごとに自動更新されます。このまま他のタブで架電記録できます。")
+        elif _LISTUP_STATE["done"]:
+            if _LISTUP_STATE["return_code"] == 0:
+                st.success("✅ リストアップ完了！ 架電先リストに追加されました。")
+                if st.button("ログをクリア", key="lu_clear_log"):
+                    _LISTUP_STATE.update({"lines": [], "done": False, "return_code": None})
+                    st.rerun()
+            else:
+                st.error(f"異常終了しました（終了コード: {_LISTUP_STATE['return_code']}）")
 
-                proc.wait()
-
-                if proc.returncode == 0:
-                    st.success("リストアップ完了！ 「コール記録」タブの会社名リストが更新されました。")
-                    if confirm_mode:
-                        _show_pending_review_ui()
-                else:
-                    st.error(f"異常終了しました (終了コード: {proc.returncode})")
-
-            except Exception as e:
-                st.error(f"実行エラー: {e}")
+        if _LISTUP_STATE["lines"]:
+            st.code("\n".join(_LISTUP_STATE["lines"][-100:]), language=None)
 
     # ── 前回の確認待ちが残っていれば常に表示 ──────────────────────
     _pending_path_check = os.path.join(OUTPUT_DIR, "pending_review.json")
@@ -1667,6 +2009,84 @@ with tab_listup:
         st.divider()
         st.caption("前回の確認モード結果が残っています。")
         _show_pending_review_ui()
+
+    # ── インライン架電記録（リストアップ中でも使える）────────────
+    st.divider()
+    with st.expander("📞 架電記録（リストアップ中でも入力できます）", expanded=False):
+        _lu_df_cl = _df_call_list
+        if _lu_df_cl.empty:
+            st.info("架電先リストが空です。リストアップ後に入力できます。")
+        else:
+            _lu_il_persons = ["全員"] + sorted(
+                _lu_df_cl["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()
+            )
+            _lu_il_person_filt = st.selectbox("架電担当者名で絞り込む", _lu_il_persons, key="lu_il_person_filt")
+            if _lu_il_person_filt == "全員":
+                _lu_company_opts = _lu_df_cl["会社名"].tolist()
+            else:
+                _lu_company_opts = _lu_df_cl[_lu_df_cl["架電担当者名"] == _lu_il_person_filt]["会社名"].tolist()
+
+            if not _lu_company_opts:
+                st.caption("該当する会社がありません。")
+            else:
+                _lu_selected = st.selectbox("会社を選択", _lu_company_opts, key="lu_il_company")
+                _lu_row = _lu_df_cl[_lu_df_cl["会社名"] == _lu_selected].iloc[0]
+
+                # 会社情報を表示
+                _lu_phone = _lu_row.get("電話番号", "") or "―"
+                _lu_rank  = _lu_row.get("リストランク", "") or "―"
+                st.info(f"📞 **{_lu_phone}**　ランク: {_lu_rank}　前回: {_lu_row.get('アプローチ内容','') or 'なし'}")
+
+                _lu_c1, _lu_c2 = st.columns(2)
+                with _lu_c1:
+                    from datetime import date as _lu_date
+                    _lu_ap_date = st.date_input("アプローチ日", value=_lu_date.today(), key="lu_il_apdate")
+                    _lu_tanto = st.text_input(
+                        "架電担当者名",
+                        value=_lu_row.get("架電担当者名", ""),
+                        key="lu_il_tanto",
+                    )
+                    _lu_apo = st.selectbox("アポ獲得", ["", "○", "×"], key="lu_il_apo")
+                with _lu_c2:
+                    _lu_result = st.selectbox(
+                        "アプローチ内容（架電結果）",
+                        options=_APPROACH_OPTIONS,
+                        key="lu_il_result",
+                    )
+                    _lu_mikomi = st.selectbox("見込み", ["", "A", "B", "C", "D"], key="lu_il_mikomi")
+                    _lu_memo = st.text_area("備考", height=80, key="lu_il_memo")
+                _lu_next = st.date_input("次回アプローチ日（任意）", value=None, key="lu_il_next")
+
+                if st.button("✅ 架電を記録する", type="primary", key="lu_il_submit"):
+                    update_call_list_row(_lu_selected, {
+                        "アプローチ日":    str(_lu_ap_date),
+                        "架電担当者名":    _lu_tanto,
+                        "アポ獲得":        _lu_apo,
+                        "アプローチ内容":  _lu_result,
+                        "見込み":          _lu_mikomi,
+                        "アプローチ備考":  _lu_memo,
+                        "次回アプローチ日": str(_lu_next) if _lu_next else "",
+                    })
+                    record_feedback(
+                        company_name=_lu_selected,
+                        approach_result=_lu_result,
+                        got_appointment=_lu_apo in ("○", "〇"),
+                        temperature=_lu_mikomi,
+                        memo=_lu_memo,
+                        tantosha=_lu_tanto,
+                    )
+                    # 担当者のブランク件数チェック → 50件未満なら自動補充
+                    if _lu_tanto:
+                        with st.spinner(f"「{_lu_tanto}」のリスト残数を確認中..."):
+                            _lu_added, _lu_err = _auto_refill_from_hubspot(_lu_tanto)
+                        if _lu_err:
+                            st.warning(f"記録しました。自動補充エラー: {_lu_err}")
+                        elif _lu_added > 0:
+                            st.info(f"🔄 「{_lu_tanto}」のリスト残数が少ないため {_lu_added}件を自動補充しました")
+                        else:
+                            st.success(f"記録しました: **{_lu_selected}** — {_lu_result}")
+                    else:
+                        st.success(f"記録しました: **{_lu_selected}** — {_lu_result}")
 
 
 # ──────────────────────────────
@@ -1691,7 +2111,7 @@ with tab_calllist:
         if _last_save_ts:
             st.caption(f"最終自動保存: {_last_save_ts}")
 
-        df_clist = load_call_list()
+        df_clist = _df_call_list.copy()
         df_fb_join = load_feedback()
 
         if df_clist.empty:
@@ -1830,6 +2250,19 @@ with tab_calllist:
                         st.warning(f"保存しました（HubSpot {_hs_ok}件反映、{_hs_errors}件エラー）")
                 else:
                     st.success("CSVに保存しました")
+
+                # 保存された担当者ごとにブランク件数をチェック → 50件未満なら自動補充
+                _saved_tantos = (
+                    _save_df["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()
+                    if "架電担当者名" in _save_df.columns else []
+                )
+                for _st_name in _saved_tantos:
+                    with st.spinner(f"「{_st_name}」のリスト残数を確認中..."):
+                        _st_added, _st_err = _auto_refill_from_hubspot(_st_name)
+                    if _st_err:
+                        st.warning(f"自動補充エラー（{_st_name}）: {_st_err}")
+                    elif _st_added > 0:
+                        st.info(f"🔄 「{_st_name}」のリスト残数が少ないため {_st_added}件を自動補充しました（A/B/C均等）")
                 st.rerun()
 
             # 自動保存トリガー（30分ごとのオートリフレッシュで発火）
@@ -2075,7 +2508,7 @@ with tab_calllist:
 
                             os.makedirs(OUTPUT_DIR, exist_ok=True)
                             if hs_overwrite.startswith("追加"):
-                                _existing_cl = load_call_list()
+                                _existing_cl = _df_call_list
                                 if not _existing_cl.empty:
                                     _existing_names = set(_existing_cl["会社名"].tolist())
                                     _hs_df = _hs_df[~_hs_df["会社名"].isin(_existing_names)]
@@ -2231,7 +2664,7 @@ with tab_calllist:
                 new_cl_df = pd.DataFrame(new_cl_rows)
 
                 if cl_overwrite.startswith("追加"):
-                    existing_cl = load_call_list()
+                    existing_cl = _df_call_list
                     if not existing_cl.empty:
                         existing_names = set(existing_cl["会社名"].tolist())
                         new_cl_df = new_cl_df[~new_cl_df["会社名"].isin(existing_names)]
@@ -2261,7 +2694,7 @@ with tab_calllist:
 
     # ── インライン架電記録 ─────────────────────────────────────────
     with cl_inline:
-        df_clist_inline = load_call_list()
+        df_clist_inline = _df_call_list
         if df_clist_inline.empty:
             st.info("架電先リストが空です。「インポート」タブからリストを読み込んでください。")
         else:
@@ -2401,6 +2834,15 @@ with tab_calllist:
                             st.warning(f"記録しました: **{il_selected}** — {il_result}　⚠️ HubSpot同期に失敗しました")
                     else:
                         st.success(f"記録しました: **{il_selected}** — {il_result}")
+
+                    # 担当者のアプローチ内容ブランクが50件未満なら自動補充
+                    if il_tantosha:
+                        with st.spinner(f"「{il_tantosha}」のリスト残数を確認中..."):
+                            _il_added, _il_refill_err = _auto_refill_from_hubspot(il_tantosha)
+                        if _il_refill_err:
+                            st.warning(f"自動補充エラー: {_il_refill_err}")
+                        elif _il_added > 0:
+                            st.info(f"🔄 「{il_tantosha}」のリスト残数が少ないため {_il_added}件を自動補充しました（A/B/C均等）")
                     st.rerun()
 
 # ──────────────────────────────
@@ -2885,3 +3327,84 @@ with tab_monitor:
             st.markdown("**自動修復した項目:**")
             for _r in _mr["repairs"]:
                 st.markdown(f"- {_r}")
+
+    # ── 自動補充リスト設定 ────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 自動補充リスト設定")
+    st.caption("架電担当者のリスト残数が50件を切ったとき、どのHubSpotリストから補充するかを設定します。未設定の場合はHubSpot全企業が対象になります。")
+
+    from config import HUBSPOT_TOKEN as _MON_HS_TOKEN
+    if not _MON_HS_TOKEN:
+        st.info("💡 HubSpot連携には環境変数 `HUBSPOT_TOKEN` の設定が必要です。")
+    else:
+        # 現在の設定を読み込む
+        _cur_refill = _load_import_settings("auto_refill_list")
+        _cur_list_id = _cur_refill.get("list_id", "")
+        _cur_list_name = _cur_refill.get("list_name", "")
+
+        # HubSpotリスト一覧を取得
+        if "mon_hs_lists_cache" not in st.session_state:
+            import requests as _mon_req
+            _mon_h = {"Authorization": f"Bearer {_MON_HS_TOKEN}", "Content-Type": "application/json"}
+            try:
+                _mon_lr = _mon_req.post(
+                    "https://api.hubapi.com/crm/v3/lists/search",
+                    headers=_mon_h,
+                    json={"objectTypeId": "0-2", "processingTypes": ["DYNAMIC", "MANUAL", "SNAPSHOT"], "count": 200, "offset": 0},
+                    timeout=15,
+                )
+                if _mon_lr.ok:
+                    _mon_raw = _mon_lr.json().get("lists") or _mon_lr.json().get("results", [])
+                    st.session_state["mon_hs_lists_cache"] = [
+                        {"listId": str(l.get("listId") or l.get("id") or ""), "name": l.get("name") or ""}
+                        for l in _mon_raw if (l.get("name") and (l.get("listId") or l.get("id")))
+                    ]
+                else:
+                    st.session_state["mon_hs_lists_cache"] = []
+            except Exception:
+                st.session_state["mon_hs_lists_cache"] = []
+
+        _mon_lists = st.session_state.get("mon_hs_lists_cache", [])
+
+        # 選択肢を作成（先頭に「全企業（指定なし）」）
+        _mon_options = ["全企業（指定なし）"] + [f"{l['name']}  [{l['listId']}]" for l in _mon_lists]
+
+        # 現在の設定に対応するインデックスを探す
+        _mon_default_idx = 0
+        if _cur_list_id:
+            for _i, _opt in enumerate(_mon_options):
+                if f"[{_cur_list_id}]" in _opt:
+                    _mon_default_idx = _i
+                    break
+
+        _mon_col1, _mon_col2 = st.columns([3, 1])
+        with _mon_col1:
+            _mon_selected = st.selectbox(
+                "補充元リスト",
+                options=_mon_options,
+                index=_mon_default_idx,
+                key="mon_refill_list_select",
+            )
+        with _mon_col2:
+            st.markdown("　")
+            if st.button("🔄 リスト更新", key="mon_refresh_lists", use_container_width=True):
+                del st.session_state["mon_hs_lists_cache"]
+                st.rerun()
+
+        # 現在の設定を表示
+        if _cur_list_id:
+            st.caption(f"現在の設定: **{_cur_list_name}** （ID: {_cur_list_id}）")
+        else:
+            st.caption("現在の設定: **全企業（指定なし）**")
+
+        if st.button("💾 設定を保存", type="primary", key="mon_save_refill_list"):
+            if _mon_selected == "全企業（指定なし）":
+                # 設定をクリア（全企業モードに戻す）
+                _save_import_settings("auto_refill_list", {"list_id": "", "list_name": ""})
+                st.success("設定を保存しました（全企業モード）")
+            elif "[" in _mon_selected:
+                _save_lid = _mon_selected.split("[")[-1].rstrip("]").strip()
+                _save_lname = _mon_selected.split("  [")[0].strip()
+                _save_import_settings("auto_refill_list", {"list_id": _save_lid, "list_name": _save_lname})
+                st.success(f"設定を保存しました → **{_save_lname}** から補充します")
+            st.rerun()
