@@ -16,14 +16,17 @@ from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, I
 
 _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# リストアップのバックグラウンド実行状態（サーバー起動中に持続するモジュール変数）
-_LISTUP_STATE: dict = {
-    "proc":        None,   # subprocess.Popen オブジェクト
-    "lines":       [],     # stdout バッファ
-    "running":     False,  # 実行中フラグ
-    "done":        False,  # 完了フラグ
-    "return_code": None,   # 終了コード
-}
+# リストアップのバックグラウンド実行状態
+# Streamlitはapp.pyを毎回再実行するため、= {} で毎回リセットされないよう
+# 初回のみ初期化する（同一プロセス内でモジュールキャッシュが保持される）
+if "_LISTUP_STATE" not in globals():
+    _LISTUP_STATE: dict = {
+        "proc":        None,   # subprocess.Popen オブジェクト
+        "lines":       [],     # stdout バッファ
+        "running":     False,  # 実行中フラグ
+        "done":        False,  # 完了フラグ
+        "return_code": None,   # 終了コード
+    }
 
 
 def _listup_reader_thread(proc: "subprocess.Popen[str]") -> None:
