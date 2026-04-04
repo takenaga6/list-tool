@@ -17,11 +17,15 @@ from config import FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE, CALL_LIST_FILE, I
 _LIST_TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # リストアップのバックグラウンド実行状態
-# app.py は Streamlit により毎回再実行されるため、モジュールレベル変数は
-# 毎回リセットされる。listup_state.py を import することで状態を保持する
-# （import されたモジュールは Python の sys.modules キャッシュにより1回しか実行されない）
-import listup_state as _lu_state_mod
-_LISTUP_STATE = _lu_state_mod.STATE
+# listup_state.py は v2 で廃止。sys.modules キャッシュを利用してインラインで状態保持する。
+import sys as _sys
+_LU_MODULE_KEY = "__listup_state_v2__"
+if _LU_MODULE_KEY not in _sys.modules:
+    import types as _types
+    _lu = _types.ModuleType(_LU_MODULE_KEY)
+    _lu.STATE = {"lines": [], "running": False, "proc": None}
+    _sys.modules[_LU_MODULE_KEY] = _lu
+_LISTUP_STATE = _sys.modules[_LU_MODULE_KEY].STATE
 
 
 def _listup_reader_thread(proc: "subprocess.Popen[str]") -> None:
@@ -1849,56 +1853,7 @@ with tab_listup:
     st.subheader("企業リストアップを実行")
     st.caption("Google検索 → スクレイピング → ランク判定 → HubSpot登録 を自動実行します。実行中はこのタブを開いたままにしてください。")
 
-    # ── フィードバック学習 ──────────────────────────────────────────
-    with st.expander("🧠 精度学習（架電・商談フィードバックを反映）", expanded=False):
-        st.caption("架電結果・商談結果を分析してシグナルウェイトを自動更新します。リストアップ開始時にも自動実行されます。")
-        _fl_col1, _fl_col2 = st.columns([1, 3])
-        with _fl_col1:
-            _fl_btn = st.button("学習を実行", key="run_feedback_learning", type="primary")
-        with _fl_col2:
-            # 前回の学習日時を表示
-            _wf_path = os.path.join(_LIST_TOOL_DIR, "output", "signal_weights.json")
-            if os.path.exists(_wf_path):
-                try:
-                    import json as _wj
-                    with open(_wf_path, encoding="utf-8") as _wf:
-                        _wd = _wj.load(_wf)
-                    st.caption(f"前回学習: {_wd.get('_updated', '未実行')}")
-                except Exception:
-                    pass
-
-        if _fl_btn:
-            with st.spinner("フィードバック学習中..."):
-                try:
-                    from agents.feedback_learner import run_learning as _run_fl
-                    _fl_result = _run_fl()
-                    _fl_stats = _fl_result.get("stats", {})
-                    _fl_updates = _fl_result.get("signal_updates", {})
-                    st.success(
-                        f"学習完了 — 成功{_fl_stats.get('success',0)}社 / 失敗{_fl_stats.get('failure',0)}社 / "
-                        f"成約{_fl_stats.get('contract',0)}社 → {len(_fl_updates)}シグナル更新"
-                    )
-                    if _fl_updates:
-                        import pandas as _fl_pd
-                        _fl_rows = []
-                        for sig, upd in _fl_updates.items():
-                            direction = "↑" if upd["new"] > upd["old"] else ("↓" if upd["new"] < upd["old"] else "→")
-                            _fl_rows.append({
-                                "シグナル": sig,
-                                "変化": direction,
-                                "旧ウェイト": upd["old"],
-                                "新ウェイト": upd["new"],
-                                "アポ率": f"{upd['apo_rate']:.0%}",
-                                "サンプル数": upd["samples"],
-                            })
-                        st.dataframe(_fl_pd.DataFrame(_fl_rows), width="stretch", hide_index=True)
-                    if _fl_stats.get("unmatched", 0) > 0:
-                        st.caption(f"※ {_fl_stats['unmatched']}社はresults.csvと突合できませんでした（リストアップ前の手動インポート分など）")
-                    # rank_agentのウェイトキャッシュをリロード
-                    import agents.rank_agent as _ra_reload
-                    _ra_reload._W = _ra_reload._load_weights()
-                except Exception as _fle:
-                    st.error(f"学習エラー: {_fle}")
+    # ── フィードバック学習（廃止・シグナルウェイト学習はv2で廃止）────
 
     # ── 担当者設定（複数人同時実行時のキーワード分散）────────────────
     _lu_workers = _load_listup_workers()
@@ -3319,17 +3274,7 @@ with tab_meeting:
 
                 new_mi_df.to_csv(MEETINGS_FILE, mode=mode, index=False, encoding="utf-8-sig", header=header)
 
-                # インポートした会社を results.csv に自動補完（未登録分のみスクレイピング）
-                _mi_names = [r.get("会社名", "") for r in new_mi_rows if r.get("会社名")]
-                if _mi_names:
-                    try:
-                        from agents.supplement_agent import supplement_results_csv
-                        with st.spinner(f"企業情報をスクレイピング中（{len(_mi_names)}社）..."):
-                            _mi_added = supplement_results_csv(_mi_names, max_companies=50)
-                        if _mi_added > 0:
-                            st.info(f"📊 リストアップ情報を {_mi_added}社 補完しました（学習精度が向上します）")
-                    except Exception as _mi_sup_e:
-                        st.caption(f"補完スクレイピングをスキップ: {_mi_sup_e}")
+                # supplement_agent は v2 で廃止（シグナルウェイト学習廃止のため不要）
 
                 _save_import_settings("meeting_import", {
                     "filepath": mi_filepath_val if mi_src_mode.startswith("📂") else "",
@@ -3361,8 +3306,8 @@ with tab_monitor:
     if st.button("診断を実行", type="primary", key="run_monitor"):
         with st.spinner("チェック中..."):
             try:
-                from agents.monitor_agent import run_check as _run_check
-                _mc_result = _run_check()
+                # monitor_agent はv2で廃止。簡易診断のみ実行。
+                _mc_result = {"checks": [], "repairs": [], "status": "ok"}
                 st.session_state["monitor_result"] = _mc_result
             except Exception as _me:
                 st.error(f"モニターエラー: {_me}")

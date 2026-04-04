@@ -649,9 +649,19 @@ def validate_company_info(info: dict) -> dict:
     return info
 
 
-def scrape_company_info(url: str, is_media_page: bool = False, media_domain: str = "", search_snippet: str = "") -> dict:
+def scrape_company_info(
+    url: str,
+    is_media_page: bool = False,
+    media_domain: str = "",
+    search_snippet: str = "",
+    minimal: bool = False,
+) -> dict:
     """
     企業情報を取得する。
+
+    minimal=True の場合（S1/S2確定企業）:
+      電話番号・従業員数・都道府県のみ取得してすぐ返す。
+      S3〜S6シグナルの深掘りスクレイピングをスキップするため高速。
 
     is_media_page=True の場合:
       まず媒体記事から企業URLを取得し、その企業サイトをスクレイピングする。
@@ -699,6 +709,33 @@ def scrape_company_info(url: str, is_media_page: bool = False, media_domain: str
         return info  # company_url = "" のまま返す
 
     info["company_url"] = target_url
+
+    # ── minimal モード（S1/S2確定企業）──────────────────────
+    # 電話番号・従業員数・都道府県のみ取得してすぐ返す（高速化）
+    if minimal:
+        text, soup = get_page_text(target_url)
+        if text:
+            if not info["company_name"] and soup:
+                info["company_name"] = extract_company_name(soup, text)
+            # 電話番号
+            for pat in PHONE_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    info["phone"] = re.sub(r"[^\d\-]", "", m.group(1))
+                    break
+            # 従業員数
+            for pat in EMPLOYEE_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    info["employee_count"] = m.group(1)
+                    break
+            # 都道府県
+            for pref in ALL_PREFECTURES:
+                if pref in text:
+                    info["prefecture"] = pref
+                    break
+        return info
+    # ─────────────────────────────────────────────────────────
 
     # 企業サイトをスクレイピング（トップ + 会社概要ページ）
     pages_to_visit = [target_url] + [target_url + path for path in ABOUT_PAGE_PATHS[:5]]

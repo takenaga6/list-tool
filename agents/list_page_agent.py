@@ -369,6 +369,148 @@ def search_company_hp(company_name: str, source_url: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────
+# S2媒体専用スクレイパー
+# ─────────────────────────────────────────────
+
+def _scrape_voice_report(base_url: str, max_pages: int = 10) -> list[str]:
+    """
+    アクサ生命ボイスレポート（voice-report.jp）から企業名を一括取得。
+    記事一覧ページをページネーションしながら企業名を抽出する。
+    """
+    names: set[str] = set()
+    try:
+        resp = requests.get(base_url, headers=HEADERS, timeout=15)
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # 記事リストから企業名抽出（アンカーテキスト・タイトル属性）
+        for a in soup.find_all("a", href=True):
+            text = a.get_text(strip=True)
+            for pat in COMPANY_NAME_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    name = m.group(1).strip()
+                    if 3 <= len(name) <= 40:
+                        names.add(name)
+
+        # ページ内全テキストからも補完
+        full_names = extract_company_names_from_text(soup.get_text(separator="\n"))
+        names.update(full_names)
+
+        # ページネーション対応（/page/2 形式）
+        for page in range(2, max_pages + 1):
+            page_url = base_url.rstrip("/") + f"/page/{page}/"
+            try:
+                r = requests.get(page_url, headers=HEADERS, timeout=10)
+                if r.status_code != 200:
+                    break
+                r.encoding = r.apparent_encoding or "utf-8"
+                s = BeautifulSoup(r.text, "html.parser")
+                page_names = extract_company_names_from_text(s.get_text(separator="\n"))
+                if not page_names:
+                    break
+                names.update(page_names)
+                time.sleep(random.uniform(0.5, 1.5))
+            except Exception:
+                break
+    except Exception as e:
+        logger.error(f"アクサ生命ボイスレポート取得エラー: {e}")
+    return sorted(names)
+
+
+def _scrape_health_media_list(list_url: str) -> list[str]:
+    """
+    健康経営メディア系一覧ページ（健康経営の広場・大同生命等）から企業名を抽出。
+    汎用HTMLスクレイパーを使う。
+    """
+    names: set[str] = set()
+    try:
+        resp = requests.get(list_url, headers=HEADERS, timeout=15)
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # テーブル・リスト・全テキストから抽出
+        names.update(extract_company_names_from_html(soup))
+
+        # ページネーション（?page=2 形式も試行）
+        for page in range(2, 8):
+            page_url = list_url.rstrip("/") + f"?page={page}"
+            try:
+                r = requests.get(page_url, headers=HEADERS, timeout=10)
+                if r.status_code != 200:
+                    break
+                r.encoding = r.apparent_encoding or "utf-8"
+                s = BeautifulSoup(r.text, "html.parser")
+                page_names = extract_company_names_from_html(s)
+                if not page_names:
+                    break
+                names.update(page_names)
+                time.sleep(random.uniform(0.5, 1.5))
+            except Exception:
+                break
+    except Exception as e:
+        logger.error(f"健康経営メディア取得エラー: {list_url} - {e}")
+    return sorted(names)
+
+
+def scrape_s2_media(list_url: str, max_companies: int = 300) -> list[dict]:
+    """
+    S2（健康経営メディア）確定ソースから企業を一括取得。
+    取得した企業には source_confirmed_s2=True を付与する。
+
+    対応URL:
+      - kenko-keiei.jp  → 既存の scrape_company_list_page() を利用（Excel）
+      - voice-report.jp → _scrape_voice_report()
+      - kenkoukeiei-media.com / daido-kenco-award.jp → _scrape_health_media_list()
+    """
+    from config import HEALTH_CERT_DOMAINS, HEALTH_MEDIA_DOMAINS
+
+    domain = urlparse(list_url).netloc.replace("www.", "")
+
+    # 健康経営優良法人（Excelダウンロード・既存処理を流用）
+    if any(d in domain for d in HEALTH_CERT_DOMAINS):
+        results = scrape_company_list_page(list_url, max_companies)
+        for r in results:
+            r["source_confirmed_s2"] = True
+            r["source_confirmed_s1"] = False
+        return results
+
+    # アクサ生命ボイスレポート
+    if "voice-report" in domain:
+        company_names = _scrape_voice_report(list_url)
+    else:
+        # 健康経営の広場・大同生命等
+        company_names = _scrape_health_media_list(list_url)
+
+    logger.info(f"S2媒体({domain}): {len(company_names)}社抽出")
+
+    results = []
+    for i, name in enumerate(company_names[:max_companies]):
+        logger.info(f"HP検索 ({i+1}/{min(len(company_names), max_companies)}): {name}")
+        result = search_company_hp(name, list_url)
+        if result:
+            result["source_confirmed_s2"] = True
+            result["source_confirmed_s1"] = False
+            results.append(result)
+        time.sleep(random.uniform(1.0, 2.5))
+
+    logger.info(f"S2媒体({domain}) HP取得完了: {len(results)}社")
+    return results
+
+
+def scrape_s1_media(list_url: str, max_companies: int = 200) -> list[dict]:
+    """
+    S1（PR有料媒体）確定ソースから企業を一括取得。
+    取得した企業には source_confirmed_s1=True を付与する。
+    """
+    results = scrape_company_list_page(list_url, max_companies)
+    for r in results:
+        r["source_confirmed_s1"] = True
+        r["source_confirmed_s2"] = False
+    return results
+
+
+# ─────────────────────────────────────────────
 # メイン関数
 # ─────────────────────────────────────────────
 

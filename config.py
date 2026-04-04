@@ -15,12 +15,10 @@ HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
 GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
 
-# 自動登録閾値
-# スコア >= AUTO_REGISTER_SCORE かつ 信頼度 >= AUTO_REGISTER_CONFIDENCE → 確認不要で自動登録
-# スコア < MIN_PENDING_SCORE → 候補リストにも追加しない（自動スキップ）
-AUTO_REGISTER_SCORE = 3       # 確認待ち相当も含め自動登録（MIN_PENDING_SCOREと同値）
-AUTO_REGISTER_CONFIDENCE = 0  # 信頼度条件なし
-MIN_PENDING_SCORE = 3         # これ未満は候補リストにも出さない
+# 登録閾値（MIN_REGISTER_SIGNALSで代替済み。後方互換用に残す）
+AUTO_REGISTER_SCORE = 3
+AUTO_REGISTER_CONFIDENCE = 0
+MIN_PENDING_SCORE = 3
 
 # 出力ファイル
 # Render Disk を使う場合は環境変数 OUTPUT_DIR にマウントパスを設定する
@@ -40,18 +38,35 @@ CALL_LIST_FILE = os.path.join(OUTPUT_DIR, "call_list.csv")               # 架�
 IMPORT_SETTINGS_FILE = os.path.join(OUTPUT_DIR, "import_settings.json") # インポート設定の記憶
 USER_FEEDBACK_FILE   = os.path.join(OUTPUT_DIR, "user_feedback.csv")   # 利用者フィードバック
 
-# シグナルキー一覧（rank_agent / feedback_learner / monitor_agent で共有）
+# ── シグナルキー（6本・Notion公式定義） ─────────────────────────────
+# S1 or S2 に該当した時点でBランク確定（問答無用）
 SIGNAL_KEYS = [
-    "PR媒体掲載", "健康経営メディア掲載", "法定外福利厚生",
-    "フィジカルケア未着手", "健康経営注力", "健康推進・セミナー",
-    "経営者の健康意識", "PR広告投資", "成長・自社ビル",
-    "高利益率B2B業種", "契約実績サイズ", "単一拠点",
+    "PR有料媒体掲載",       # S1: 単独でB確定
+    "健康経営メディア掲載",  # S2: 単独でB確定
+    "法定外福利厚生",        # S3
+    "健康経営注力",          # S4
+    "HPリニューアル",        # S5
+    "自社ビル",              # S6
 ]
 
-# シグナルウェイトのクランプ範囲
-WEIGHT_MIN = 0.4
-WEIGHT_MAX = 2.5
-DEFAULT_WEIGHT = 1.0
+# S1: PR有料媒体リストページ（静的HTML・一覧スクレイプ）
+S1_MEDIA_LIST_URLS: list[str] = [
+    "https://superceo.jp/list/company",       # SUPER CEO
+    "https://business-plus.net/interview/",   # B-PLUS
+]
+
+# S2: 健康経営メディアリストページ（一覧スクレイプ → S2確定）
+S2_MEDIA_LIST_URLS: list[str] = [
+    "https://kenko-keiei.jp/houjin_list/",       # 健康経営優良法人（Excel自動DL）
+    "https://www.voice-report.jp/",              # アクサ生命ボイスレポート
+    "https://kenkoukeiei-media.com/",            # 健康経営の広場
+    "https://daido-kenco-award.jp/companies/",   # 大同生命
+]
+
+# ランク閾値
+RANK_A_EXTRA_SIGNALS = 2   # S1/S2あり + S3〜S6がこの数以上 → A
+RANK_B_MIN_SIGNALS   = 3   # S1/S2なしの場合のB最低ライン（S3〜S6の合計）
+MIN_REGISTER_SIGNALS = 3   # HubSpot登録最低ライン（or S1/S2あり）
 
 
 def load_exclude_list_csv() -> set[str]:
@@ -472,24 +487,20 @@ REJECTED_SEARCH_URLS_FILE = os.path.join(OUTPUT_DIR, "rejected_search_urls.csv")
 
 # NG業種キーワード
 NG_INDUSTRY_KEYWORDS = [
-    # 建設・土木
+    # 建設・土木（Notion公式NG）
     "建設", "土木", "工務店", "ゼネコン",
-    # 運送・物流
-    "運送", "運輸", "物流", "宅配", "配送", "トラック", "引越",
+    # 運送・運輸（Notion公式NG）
+    "運送", "運輸", "宅配", "トラック", "引越",
     # 医療・福祉
     "病院", "クリニック", "診療所", "薬局", "調剤", "医療法人",
     "介護", "デイサービス", "保育", "幼稚園",
-    # toC小売・飲食・サービス
+    # 店舗展開型toC（飲食・小売・美容）
     "スーパー", "コンビニ", "飲食店", "レストラン", "居酒屋",
     "美容院", "美容室", "ネイルサロン",
     "小売", "量販店", "ドラッグストア",
-    # 警備
-    "警備", "ガードマン", "交通誘導",
-    # 清掃・廃棄物
-    "清掃業", "廃棄物", "ビルメンテナンス",
-    # 自動車・整備
-    "自動車販売", "車検", "カーディーラー",
-    # SES・人材派遣（常駐型のためオフィス不在率が高い）
+    # 警備・清掃（現場常駐型）
+    "警備", "ガードマン", "清掃業", "廃棄物",
+    # SES・常駐（客先常駐でオフィスに社員がいない）
     "SES", "システムエンジニアリングサービス", "常駐", "派遣エンジニア",
     # フランチャイズチェーン（店舗型toC）
     "ファミリーマート", "セブンイレブン", "ローソン", "ミニストップ",
@@ -514,17 +525,6 @@ HEALTH_CERT_DOMAINS = [
     "kenko-keiei.jp",   # 健康経営優良法人認定事務局ポータル（経産省）
 ]
 
-# 媒体リストページURL（自動モード起動時に最優先で処理するソース）
-# ── 処理順: 健康経営系 → PR媒体系 → キーワード検索 ──
-# ※ kenko-keiei.jp はページ内のExcelリンクを自動検出してDL（大規模法人は自動除外）
-# ※ SPA（KENJA GLOBAL / SMB Excellent等）は Playwright 未対応のためキーワード検索で代替
-MEDIA_LIST_URLS: list[str] = [
-    # ── 健康経営系（最優先） ──────────────────────────────
-    "https://kenko-keiei.jp/houjin_list/",   # 健康経営優良法人 中小規模（経産省認定・Excel自動DL）
-    # ── PR媒体系（静的HTML） ─────────────────────────────
-    "https://superceo.jp/list/company",       # SUPER CEO 掲載企業一覧（50音順）
-    "https://business-plus.net/interview/",   # B-PLUS インタビュー掲載企業一覧
-    # ── 将来対応予定 ─────────────────────────────────────
-    # "https://smbexcellentcompany.com/2025/",  # SPA（Nuxt.js）→ Playwright対応後に追加
-    # "https://kenja.tv/",                       # SPA → 同上
-]
+# 媒体リストページURL（後方互換用・S1+S2を統合した全リスト）
+# main.py からはこれを参照するか S1_MEDIA_LIST_URLS / S2_MEDIA_LIST_URLS を直接使う
+MEDIA_LIST_URLS: list[str] = S2_MEDIA_LIST_URLS + S1_MEDIA_LIST_URLS

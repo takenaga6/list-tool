@@ -25,12 +25,11 @@ from config import (
     TIME_PERIOD_TBS,
     TIME_PERIODS,
     OUTPUT_DIR,
-    FEEDBACK_FILE,
     EXCLUDE_LIST_CSV,
+    S1_MEDIA_LIST_URLS,
+    S2_MEDIA_LIST_URLS,
     MEDIA_LIST_URLS,
-    AUTO_REGISTER_SCORE,
-    AUTO_REGISTER_CONFIDENCE,
-    MIN_PENDING_SCORE,
+    MIN_REGISTER_SIGNALS,
     PROCESSED_URLS_FILE,
 )
 from agents.search_agent import extract_domain, search_google
@@ -38,8 +37,23 @@ from agents.scraper_agent import scrape_company_info, find_media_article_url
 from agents.rank_agent import evaluate_rank, pre_screen
 from agents.hubspot_agent import HubSpotAgent
 from agents.keyword_agent import get_sorted_queries, record_hit, record_ng, record_rank_result, show_top_queries
-from agents.list_page_agent import scrape_company_list_page
-from agents.monitor_agent import run_check as _monitor_run_check
+from agents.list_page_agent import scrape_company_list_page, scrape_s1_media, scrape_s2_media
+
+# ─── S1/S2対応リスト取得ヘルパー ──────────────────────────────────────────
+def _scrape_list_with_signal(list_url: str, max_companies: int = 200) -> list[dict]:
+    """
+    URLがS1/S2媒体かどうかを判定して適切なスクレイパーを呼び出す。
+    S2媒体 → scrape_s2_media (source_confirmed_s2=True)
+    S1媒体 → scrape_s1_media (source_confirmed_s1=True)
+    その他  → scrape_company_list_page (フラグなし)
+    """
+    from config import S2_MEDIA_LIST_URLS, S1_MEDIA_LIST_URLS
+    if any(list_url.startswith(u) for u in S2_MEDIA_LIST_URLS):
+        return scrape_s2_media(list_url, max_companies)
+    elif any(list_url.startswith(u) for u in S1_MEDIA_LIST_URLS):
+        return scrape_s1_media(list_url, max_companies)
+    else:
+        return scrape_company_list_page(list_url, max_companies)
 
 # ログ設定
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -496,12 +510,16 @@ def process_one_company(
             record_ng(search_result["search_query"])
             return "ng"
 
-        # ── Agent2: ディープリサーチャー（通過企業のみスクレイピング）──
+        # ── Agent2: スクレイピング ──────────────────────────────────
+        # S1/S2確定企業は minimal=True（電話番号・従業員数・都道府県のみ取得・高速）
+        _s1_confirmed = search_result.get("source_confirmed_s1", False)
+        _s2_confirmed = search_result.get("source_confirmed_s2", False)
         company_info = scrape_company_info(
             url,
             is_media_page=is_media_page,
             media_domain=search_result.get("media_domain", ""),
             search_snippet=search_result.get("snippet", ""),
+            minimal=(_s1_confirmed or _s2_confirmed),
         )
 
         # 企業URLが取れなかった場合はスキップ（官公庁・サービスサイト・株式会社未確認）
@@ -749,7 +767,7 @@ def main():
         try:
             for list_url in list_urls:
                 print(f"\n📋 リストページ取得中: {list_url}")
-                list_results = scrape_company_list_page(list_url, max_companies=target_count * 2)
+                list_results = _scrape_list_with_signal(list_url, max_companies=target_count * 2)
                 print(f"  → {len(list_results)}社のHP取得完了。処理開始...")
 
                 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -953,7 +971,7 @@ def run_daemon(interval_minutes: int = 60):
             for list_url in list(MEDIA_LIST_URLS):
                 print(f"\n📋 リストページ取得中: {list_url}")
                 try:
-                    list_results = scrape_company_list_page(list_url, max_companies=200)
+                    list_results = _scrape_list_with_signal(list_url, max_companies=200)
                     print(f"  → {len(list_results)}社を処理開始...")
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                         futures = {
@@ -1110,7 +1128,7 @@ def run_list_daemon(interval_minutes: int = 60):
             for list_url in list(MEDIA_LIST_URLS):
                 print(f"\n📋 リストページ取得中: {list_url}")
                 try:
-                    list_results = scrape_company_list_page(list_url, max_companies=200)
+                    list_results = _scrape_list_with_signal(list_url, max_companies=200)
                     print(f"  → {len(list_results)}社を処理開始...")
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                         futures = {
@@ -1607,31 +1625,7 @@ def run_batch(
         tbs   = TIME_PERIOD_TBS.get(label, "")
         periods.append((label, tbs))
 
-    # モニターチェック（ヘルスチェック＋自動修復）
-    try:
-        _mc = _monitor_run_check()
-        for _c in _mc["checks"]:
-            if _c["status"] == "error":
-                logger.error(f"[モニター] {_c['name']}: {_c['message']}")
-            elif _c["status"] in ("warn", "fixed"):
-                logger.warning(f"[モニター] {_c['name']}: {_c['message']}")
-        if _mc["repairs"]:
-            for _r in _mc["repairs"]:
-                print(f"[モニター 自動修復] {_r}")
-    except Exception as _mce:
-        logger.warning(f"モニターチェックスキップ: {_mce}")
-
-    # フィードバック学習を自動実行（リストアップ開始前にウェイトを最新化）
-    try:
-        from agents.feedback_learner import run_learning
-        _fl = run_learning()
-        if _fl.get("signal_updates"):
-            print(f"[INFO] フィードバック学習完了: {len(_fl['signal_updates'])}シグナル更新")
-        # rank_agentのウェイトキャッシュをリロード
-        import agents.rank_agent as _ra
-        _ra._W = _ra._load_weights()
-    except Exception as _fle:
-        logger.warning(f"フィードバック学習スキップ: {_fle}")
+    # monitor_agent / feedback_learner は廃止（シグナルウェイト学習廃止）
 
     list_urls: list | None = None
     if auto_mode:
@@ -1699,7 +1693,7 @@ def run_batch(
                 if stats["success"] >= target_count:
                     break
                 print(f"\n📋 リストページ取得中: {list_url}")
-                list_results = scrape_company_list_page(list_url, max_companies=target_count * 2)
+                list_results = _scrape_list_with_signal(list_url, max_companies=target_count * 2)
                 print(f"  → {len(list_results)}社を処理開始...")
                 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                     futures = {
@@ -1854,12 +1848,8 @@ if __name__ == "__main__":
     elif "--analyze" in sys.argv:
         analyze_feedback()
     elif "--audit" in sys.argv:
-        from agents.hubspot_auditor import audit_hubspot
-        scrape = "--scrape" in sys.argv
-        result = audit_hubspot(scrape_borderline=scrape)
-        print(f"\n監査結果: {result['total']}社中 {result['ng']}社をNG判定")
-        for item in result["flagged"]:
-            print(f"  NG: {item['name']} ({item['domain']}) - {item['reason']}")
+        # hubspot_auditor は v2 で廃止
+        print("--audit は v2 で廃止されました。HubSpot管理画面から直接確認してください。")
     elif "--update-docs" in sys.argv:
         update_overview_docs()
     elif "--list-daemon" in sys.argv:
