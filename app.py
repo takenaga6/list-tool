@@ -23,7 +23,7 @@ _LU_MODULE_KEY = "__listup_state_v2__"
 if _LU_MODULE_KEY not in _sys.modules:
     import types as _types
     _lu = _types.ModuleType(_LU_MODULE_KEY)
-    _lu.STATE = {"lines": [], "running": False, "proc": None}
+    _lu.STATE = {"lines": [], "running": False, "done": False, "proc": None, "return_code": None}
     _sys.modules[_LU_MODULE_KEY] = _lu
 _LISTUP_STATE = _sys.modules[_LU_MODULE_KEY].STATE
 
