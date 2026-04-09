@@ -31,6 +31,8 @@ from config import (
     MEDIA_LIST_URLS,
     MIN_REGISTER_SIGNALS,
     PROCESSED_URLS_FILE,
+    is_excluded_company,
+    add_to_excluded_companies,
 )
 from agents.search_agent import extract_domain, search_google
 from agents.scraper_agent import scrape_company_info, find_media_article_url
@@ -300,6 +302,7 @@ def review_and_register(
 
         # HubSpot重複チェック
         if hubspot.check_duplicate(company_name=name, domain=company_domain):
+            add_to_excluded_companies(name, "HubSpot重複")
             print(f"  重複→スキップ: {name}")
             continue
 
@@ -502,6 +505,14 @@ def process_one_company(
             logger.info(f"ファイルから{success_count}社登録: {url}")
             return "success" if success_count > 0 else "skip"
 
+        # ── 除外済み企業チェック（スクレイピング前・HTTPリクエスト不要）──
+        # リストページ経由の場合 search_query = 会社名 なので確実にマッチする
+        if search_result.get("source_list_url"):
+            _pre_name = search_result.get("search_query", "")
+            if _pre_name and is_excluded_company(_pre_name):
+                logger.info(f"除外済みスキップ（スクレイピング前）: {_pre_name}")
+                return "ng"
+
         # ── Agent1: スクリーナー（スニペット+URLだけで軽量NG判定）──
         passed, screen_reason = pre_screen(search_result)
         if not passed:
@@ -527,6 +538,12 @@ def process_one_company(
             logger.debug(f"企業URL未確認→スキップ: {url}")
             return "skip"
 
+        # ── 除外済み企業チェック（スクレイピング後・実際の会社名で確認）──
+        _scraped_name = company_info.get("company_name", "")
+        if _scraped_name and is_excluded_company(_scraped_name):
+            logger.info(f"除外済みスキップ（スクレイピング後）: {_scraped_name}")
+            return "ng"
+
         # 企業ドメインで重複チェック（同じ会社の別記事をスキップ）
         company_domain = extract_domain(company_info.get("company_url") or url)
         if company_domain in processed_domains:
@@ -537,8 +554,10 @@ def process_one_company(
         rank_result = evaluate_rank(company_info, [search_result])
 
         if rank_result["rank"] == "NG":
-            print(f"  ⛔ NGスキップ: {company_info.get('company_name') or company_domain} [{rank_result['ng_reason']}]")
+            _ng_name = company_info.get("company_name") or ""
+            print(f"  ⛔ NGスキップ: {_ng_name or company_domain} [{rank_result['ng_reason']}]")
             record_ng(search_result["search_query"])  # NGをクエリ学習に反映
+            add_to_excluded_companies(_ng_name, f"NG: {rank_result.get('ng_reason', '')}")
             return "ng"
 
         # 媒体記事URLを取得（媒体クエリ経由の場合のみ、バックグラウンドで検索）
@@ -585,11 +604,13 @@ def process_one_company(
 
         # スコアが低すぎる or 必須フィールド不足 → 候補にも出さない
         if score < MIN_REGISTER_SIGNALS or not has_min_fields:
+            _low_name = company_info.get("company_name") or ""
             logger.debug(
                 f"自動スキップ（スコア{score}点 / 信頼度{confidence} / フィールド:{has_min_fields}）: "
-                f"{company_info.get('company_name') or company_domain}"
+                f"{_low_name or company_domain}"
             )
             record_ng(search_result["search_query"])
+            add_to_excluded_companies(_low_name, f"スコア不足（{score}点）")
             return "ng"
 
         # スコアが高く信頼度も十分かつ必須フィールド全揃い → 確認モードでも自動登録
@@ -599,6 +620,7 @@ def process_one_company(
                 domain=company_domain,
             )
             if is_dup:
+                add_to_excluded_companies(company_info.get("company_name", ""), "HubSpot重複")
                 return "duplicate"
             if hubspot.register_company(company_info):
                 print(
@@ -647,6 +669,7 @@ def process_one_company(
 
         if is_dup:
             hubspot.add_to_ng_list(company_info, reason="HubSpot重複")
+            add_to_excluded_companies(company_info.get("company_name", ""), "HubSpot重複")
             print(f"  重複→NGリスト: {company_info.get('company_name') or company_domain}")
             return "duplicate"
 

@@ -523,3 +523,68 @@ HEALTH_CERT_DOMAINS = [
 # 媒体リストページURL（後方互換用・S1+S2を統合した全リスト）
 # main.py からはこれを参照するか S1_MEDIA_LIST_URLS / S2_MEDIA_LIST_URLS を直接使う
 MEDIA_LIST_URLS: list[str] = S2_MEDIA_LIST_URLS + S1_MEDIA_LIST_URLS
+
+# ── 除外済み企業ファイル（excluded_companies.json）──────────────────
+# NG判定・HubSpot重複で弾かれた企業を蓄積し、次回実行時にHTTPリクエスト不要でスキップする
+
+EXCLUDED_COMPANIES_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "excluded_companies.json"
+)
+
+_excluded_cache: set[str] | None = None  # プロセス内インメモリキャッシュ
+
+
+def _load_excluded_cache() -> set[str]:
+    """excluded_companies.json を読み込みキャッシュを初期化する（初回のみIOアクセス）"""
+    global _excluded_cache
+    if _excluded_cache is None:
+        try:
+            if os.path.exists(EXCLUDED_COMPANIES_FILE):
+                with open(EXCLUDED_COMPANIES_FILE, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+                _excluded_cache = {e["company_name"] for e in entries if e.get("company_name")}
+            else:
+                _excluded_cache = set()
+        except Exception:
+            _excluded_cache = set()
+    return _excluded_cache
+
+
+def is_excluded_company(company_name: str) -> bool:
+    """会社名が除外済みリストに登録されているか確認する（HTTPリクエスト不要）"""
+    if not company_name:
+        return False
+    return company_name in _load_excluded_cache()
+
+
+def add_to_excluded_companies(company_name: str, reason: str):
+    """
+    NG/重複企業を excluded_companies.json に追記する。
+    既に登録済みの場合は何もしない。キャッシュも同時更新。
+    """
+    if not company_name:
+        return
+    cache = _load_excluded_cache()
+    if company_name in cache:
+        return  # 重複追記しない
+
+    entries: list = []
+    if os.path.exists(EXCLUDED_COMPANIES_FILE):
+        try:
+            with open(EXCLUDED_COMPANIES_FILE, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+        except Exception:
+            entries = []
+
+    from datetime import datetime as _dt
+    entries.append({
+        "company_name": company_name,
+        "reason":       reason,
+        "excluded_at":  _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    try:
+        with open(EXCLUDED_COMPANIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+        cache.add(company_name)  # インメモリキャッシュも更新
+    except Exception:
+        pass
