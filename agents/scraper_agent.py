@@ -41,6 +41,31 @@ SUB_PAGE_PATHS = [
     "/info", "/company-info", "/overview", "/aboutus",
 ]
 
+# 会社名ノイズ除去パターン
+# 「及び」「および」は複数企業の並列を示すため → 名前ごと除外
+_NAME_CONJUNCTION = re.compile(r"及び|および")
+# 「ほか」「など」が末尾に付く場合は後ろを切り捨て、コアを残す
+_NAME_SUFFIX_NOISE = re.compile(r"[　\s]*(?:ほか|など)[^\n。]*$")
+
+
+def _clean_company_name(name: str) -> str:
+    """
+    会社名に混入するノイズ表現を除去または除外する。
+
+    - 「及び」「および」を含む → 複数企業の並列表記の可能性が高い → 空文字（除外）
+    - 末尾の「ほか〜」「など〜」→ サフィックスを切り捨てた上でコアを返す
+
+    空文字を返した場合は呼び出し元で除外すること。
+    """
+    if _NAME_CONJUNCTION.search(name):
+        logger.debug(f"会社名除外（接続詞含む）: {name}")
+        return ""
+    cleaned = _NAME_SUFFIX_NOISE.sub("", name).strip()
+    if cleaned != name:
+        logger.debug(f"会社名ノイズ除去: {name!r} → {cleaned!r}")
+    return cleaned
+
+
 REP_PATTERNS = [
     r"代表取締役(?:社長|CEO|COO)?\s*[：:]\s*([^\s\n\r<「」]{2,20})",
     r"代表者?\s*[：:]\s*([^\s\n\r<「」]{2,20})",
@@ -475,15 +500,21 @@ def extract_company_name(soup: BeautifulSoup, text: str) -> str:
                 for part in title_text.split(sep):
                     part = part.strip()
                     if any(kw in part for kw in ["株式会社", "合同会社", "有限会社", "一般社団法人"]):
-                        return part[:40]
+                        cleaned = _clean_company_name(part[:40])
+                        if cleaned:
+                            return cleaned
         og = soup.find("meta", property="og:site_name")
         if og and og.get("content"):
-            return og["content"].strip()[:40]
+            cleaned = _clean_company_name(og["content"].strip()[:40])
+            if cleaned:
+                return cleaned
 
     for pattern in COMPANY_NAME_PATTERNS:
         match = re.search(pattern, text[:500])
         if match:
-            return match.group(1).strip()[:40]
+            cleaned = _clean_company_name(match.group(1).strip()[:40])
+            if cleaned:
+                return cleaned
     return ""
 
 
@@ -629,8 +660,11 @@ def validate_company_info(info: dict) -> dict:
             logger.debug(f"電話番号形式NG→クリア: {phone}")
             info["phone"] = ""
 
-    # 会社名: 法人格あり + 60文字以内
+    # 会社名: ノイズ除去 → 法人格あり + 60文字以内で信頼度+1
     name = info.get("company_name", "")
+    if name:
+        name = _clean_company_name(name)
+        info["company_name"] = name  # クリーニング結果で上書き
     if name and re.search(r"株式会社|合同会社|有限会社|一般社団法人", name) and len(name) <= 60:
         confidence += 1
 

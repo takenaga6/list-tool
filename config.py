@@ -588,3 +588,23 @@ def add_to_excluded_companies(company_name: str, reason: str):
         cache.add(company_name)  # インメモリキャッシュも更新
     except Exception:
         pass
+
+# ── media_config.json からカスタム媒体を自動マージ ────────────────────
+# 起動時に一度だけ実行され、S1/S2/MEDIA_LIST_URLS を自動拡張する。
+# スクレイピングロジックはこれらの変数を参照するだけなので変更不要。
+_MEDIA_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media_config.json")
+if os.path.exists(_MEDIA_CONFIG_FILE):
+    try:
+        _mc_data = json.load(open(_MEDIA_CONFIG_FILE, encoding="utf-8"))
+        for _mc_entry in _mc_data.get("S1", []):
+            _mc_url = _mc_entry.get("url", "")
+            if _mc_url and _mc_url not in S1_MEDIA_LIST_URLS:
+                S1_MEDIA_LIST_URLS.append(_mc_url)
+        for _mc_entry in _mc_data.get("S2", []):
+            _mc_url = _mc_entry.get("url", "")
+            if _mc_url and _mc_url not in S2_MEDIA_LIST_URLS:
+                S2_MEDIA_LIST_URLS.append(_mc_url)
+        # MEDIA_LIST_URLS を再構築（S2 → S1 の順序を維持）
+        MEDIA_LIST_URLS[:] = S2_MEDIA_LIST_URLS + S1_MEDIA_LIST_URLS
+    except Exception:
+        pass
