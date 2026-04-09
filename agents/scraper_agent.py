@@ -34,6 +34,13 @@ ABOUT_PAGE_PATHS = [
     "/info", "/info/company",
 ]
 
+# トップページで従業員数・TEL・代表者が取得できなかった場合に順番に試すサブページパス
+SUB_PAGE_PATHS = [
+    "/company", "/company/profile", "/company/outline", "/company/about",
+    "/about", "/about/company", "/profile", "/outline", "/corporate",
+    "/info", "/company-info", "/overview", "/aboutus",
+]
+
 REP_PATTERNS = [
     r"代表取締役(?:社長|CEO|COO)?\s*[：:]\s*([^\s\n\r<「」]{2,20})",
     r"代表者?\s*[：:]\s*([^\s\n\r<「」]{2,20})",
@@ -737,31 +744,45 @@ def scrape_company_info(
         return info
     # ─────────────────────────────────────────────────────────
 
-    # 企業サイトをスクレイピング（トップ + 会社概要ページ）
-    pages_to_visit = [target_url] + [target_url + path for path in ABOUT_PAGE_PATHS[:5]]
+    # 企業サイトをスクレイピング
     all_text = ""
     main_soup = None
 
-    for page_url in pages_to_visit[:6]:
-        text, soup = get_page_text(page_url)
-        if not text:
-            continue
-        if not main_soup:
-            main_soup = soup
-            if soup:
-                # トップページでファイルリンクを検出してinfoに記録（自動処理用）
-                from agents.list_page_agent import find_file_links
-                found_files = find_file_links(soup, page_url)
-                if found_files:
-                    info["found_file_links"] = found_files
-                    logger.info(f"ページ内ファイルリンク検出: {len(found_files)}件 @ {page_url}")
-                # 注目リンク収集（プレスリリース・認定・掲載記事等）
-                info["notable_links"] = extract_notable_links(soup, page_url)
-        all_text += " " + text
-        if not info["company_name"] and soup:
-            info["company_name"] = extract_company_name(soup, text)
-        if info["representative"] and info["phone"] and info["address"]:
-            break
+    # ── ① トップページ取得 ───────────────────────────────────────
+    top_text, top_soup = get_page_text(target_url)
+    if top_text:
+        main_soup = top_soup
+        all_text = top_text
+        if top_soup:
+            # トップページでファイルリンクを検出してinfoに記録（自動処理用）
+            from agents.list_page_agent import find_file_links
+            found_files = find_file_links(top_soup, target_url)
+            if found_files:
+                info["found_file_links"] = found_files
+                logger.info(f"ページ内ファイルリンク検出: {len(found_files)}件 @ {target_url}")
+            # 注目リンク収集（プレスリリース・認定・掲載記事等）
+            info["notable_links"] = extract_notable_links(top_soup, target_url)
+        if not info["company_name"] and top_soup:
+            info["company_name"] = extract_company_name(top_soup, top_text)
+
+    # ── ② トップページで3項目のいずれかが未取得 → サブページを順番に試す ──
+    if (not extract_employee_count(all_text)
+            or not extract_phone(all_text, main_soup)
+            or not extract_representative(all_text)):
+        for _path in SUB_PAGE_PATHS:
+            _sub_url = target_url.rstrip("/") + _path
+            _sub_text, _sub_soup = get_page_text(_sub_url)
+            if not _sub_text:
+                continue
+            all_text += " " + _sub_text
+            if not info["company_name"] and _sub_soup:
+                info["company_name"] = extract_company_name(_sub_soup, _sub_text)
+            # 3項目すべて揃ったら終了
+            if (extract_employee_count(all_text)
+                    and extract_phone(all_text, _sub_soup)
+                    and extract_representative(all_text)):
+                logger.debug(f"サブページで3項目取得完了: {_sub_url}")
+                break
 
     if not all_text.strip():
         # JSレンダリングサイト等でテキスト0文字の場合、検索スニペットで補完
