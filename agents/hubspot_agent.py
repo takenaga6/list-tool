@@ -24,6 +24,13 @@ class HubSpotAgent:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+        # 担当者自動割り振り用
+        # MEMBERSが未設定の場合は空リストになり、割り振り処理はスキップされる
+        self._members: list[str] = self._load_members()
+        # 各担当者の未架電件数キャッシュ（初回登録時にHubSpotから取得して以降はローカルで加算）
+        self._member_counts: dict[str, int] | None = None
+        # ラウンドロビン用インデックス（未架電件数が同数のときのタイブレーク）
+        self._rr_index: int = 0
 
     # -------------------------
     # 重複チェック
@@ -145,6 +152,9 @@ class HubSpotAgent:
             company_id = resp.json().get("id")
             logger.info(f"企業登録成功: {company_data.get('company_name')} (ID:{company_id})")
 
+            # 担当者を自動割り振り（MEMBERS未設定の場合はスキップ）
+            self._assign_member_to_company(company_id)
+
             if company_data.get("representative"):
                 self._register_and_associate_contact(company_data, company_id)
 
@@ -222,6 +232,91 @@ class HubSpotAgent:
                 "備考":    company_data.get("notes", ""),
                 "NG理由":   reason,
             })
+
+    # -------------------------
+    # 担当者自動割り振り
+    # -------------------------
+
+    @staticmethod
+    def _load_members() -> list[str]:
+        """環境変数 MEMBERS（カンマ区切り）からメンバーリストを取得する"""
+        raw = os.getenv("MEMBERS", "")
+        return [m.strip() for m in raw.split(",") if m.strip()]
+
+    def _fetch_member_counts(self) -> dict[str, int]:
+        """
+        各担当者の「未架電件数」をHubSpotから取得する。
+        未架電 = kadentantoushamei が自分 かつ apurochinaiyou が未設定。
+        取得失敗した担当者は 0 として扱う。
+        """
+        counts: dict[str, int] = {m: 0 for m in self._members}
+        url = f"{self.base_url}/crm/v3/objects/companies/search"
+        for member in self._members:
+            payload = {
+                "filterGroups": [{
+                    "filters": [
+                        {"propertyName": "kadentantoushamei",
+                         "operator": "EQ", "value": member},
+                        {"propertyName": "apurochinaiyou",
+                         "operator": "NOT_HAS_PROPERTY"},
+                    ]
+                }],
+                "properties": ["name"],
+                "limit": 1,
+            }
+            try:
+                resp = requests.post(url, json=payload, headers=self.headers, timeout=10)
+                if resp.ok:
+                    counts[member] = resp.json().get("total", 0)
+            except Exception as e:
+                logger.warning(f"未架電件数取得失敗 ({member}): {e}")
+        logger.info(f"[割り振り] 未架電件数: {counts}")
+        return counts
+
+    def _pick_next_member(self) -> str | None:
+        """
+        未架電件数が最も少ない担当者を返す（均等化）。
+        同数の場合はラウンドロビンインデックスでタイブレーク。
+        メンバーリストが空の場合は None を返す。
+        """
+        if not self._members:
+            return None
+        # 初回のみHubSpotから実件数を取得してキャッシュ
+        if self._member_counts is None:
+            self._member_counts = self._fetch_member_counts()
+
+        min_count = min(self._member_counts.values())
+        # 最小件数を持つ担当者を元のリスト順で絞り込む
+        candidates = [m for m in self._members if self._member_counts[m] == min_count]
+        chosen = candidates[self._rr_index % len(candidates)]
+        self._rr_index += 1
+        # ローカルカウントをインクリメント（毎回HubSpotを叩かないようにするため）
+        self._member_counts[chosen] += 1
+        return chosen
+
+    def _assign_member_to_company(self, company_id: str) -> None:
+        """
+        企業レコードに kadentantoushamei（架電担当者名）を設定する。
+        MEMBERSが未設定の場合はスキップ。失敗しても企業登録結果には影響しない。
+        """
+        member = self._pick_next_member()
+        if not member:
+            return  # MEMBERSが未設定 → スキップ
+        try:
+            resp = requests.patch(
+                f"{self.base_url}/crm/v3/objects/companies/{company_id}",
+                json={"properties": {"kadentantoushamei": member}},
+                headers=self.headers,
+                timeout=10,
+            )
+            if resp.ok:
+                logger.info(f"[割り振り] {member} → company_id={company_id}")
+            else:
+                logger.warning(
+                    f"[割り振り] PATCH失敗: {resp.status_code} {resp.text[:100]}"
+                )
+        except Exception as e:
+            logger.error(f"[割り振り] 例外: {e}")
 
     # -------------------------
     # ユーティリティ
