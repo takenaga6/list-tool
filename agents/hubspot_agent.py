@@ -91,6 +91,7 @@ class HubSpotAgent:
             "numberofemployees": company_data.get("employee_count", ""),
             "description":       company_data.get("notes", ""),
             "city":              company_data.get("prefecture", ""),  # 都道府県をcityにも入れる
+            "a_12":              company_data.get("rank", ""),        # リストランク（A/B/C）
         }
         # 空文字・Noneを除去
         company_props = {k: v for k, v in company_props.items() if v}

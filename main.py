@@ -306,6 +306,7 @@ def review_and_register(
             print(f"  重複→スキップ: {name}")
             continue
 
+        info["rank"] = rank  # HubSpot a_12 書き込み用
         if hubspot.register_company(info):
             print(f"  [{rank}] 登録: {name}")
             write_result_row({
@@ -552,6 +553,7 @@ def process_one_company(
 
         # ランク判定
         rank_result = evaluate_rank(company_info, [search_result])
+        company_info["rank"] = rank_result["rank"]  # HubSpot a_12 書き込み用
 
         if rank_result["rank"] == "NG":
             _ng_name = company_info.get("company_name") or ""
