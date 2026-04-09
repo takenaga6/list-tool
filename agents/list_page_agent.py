@@ -453,15 +453,138 @@ def _scrape_health_media_list(list_url: str) -> list[str]:
     return sorted(names)
 
 
+def _scrape_kenkoukeiei_media(base_url: str, max_pages: int = 30) -> list[str]:
+    """
+    健康経営の広場（kenkoukeiei-media.com）から企業名を一括取得。
+    記事一覧をページネーション（/page/N/ 形式）しながら抽出する。
+    """
+    names: set[str] = set()
+    try:
+        resp = requests.get(base_url, headers=HEADERS, timeout=15)
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # アンカーテキスト・見出しから企業名抽出
+        for a in soup.find_all("a", href=True):
+            text = a.get_text(strip=True)
+            for pat in COMPANY_NAME_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    name = m.group(1).strip()
+                    if 3 <= len(name) <= 40:
+                        names.add(name)
+
+        # ページ全体テキストからも補完
+        names.update(extract_company_names_from_text(soup.get_text(separator="\n")))
+
+        # ページネーション（/page/N/ 形式）
+        for page in range(2, max_pages + 1):
+            page_url = base_url.rstrip("/") + f"/page/{page}/"
+            try:
+                r = requests.get(page_url, headers=HEADERS, timeout=10)
+                if r.status_code != 200:
+                    break
+                r.encoding = r.apparent_encoding or "utf-8"
+                s = BeautifulSoup(r.text, "html.parser")
+                page_names = extract_company_names_from_text(s.get_text(separator="\n"))
+                if not page_names:
+                    break
+                names.update(page_names)
+                time.sleep(random.uniform(0.5, 1.5))
+            except Exception:
+                break
+    except Exception as e:
+        logger.error(f"健康経営の広場取得エラー: {e}")
+    return sorted(names)
+
+
+def _scrape_daido_award(base_url: str, max_pages: int = 20) -> list[str]:
+    """
+    大同生命健康経営アワード（daido-kenco-award.jp/companies/）から企業名を一括取得。
+    受賞企業一覧ページから会社名を抽出する。
+    ページネーションは ?page=N 形式と /page/N/ 形式の両方を試みる。
+    """
+    names: set[str] = set()
+    try:
+        resp = requests.get(base_url, headers=HEADERS, timeout=15)
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # h2/h3/h4・テーブルセル・リスト項目から企業名を抽出
+        for tag in soup.find_all(["h2", "h3", "h4", "td", "li", "p", "span"]):
+            text = tag.get_text(strip=True)
+            for pat in COMPANY_NAME_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    name = m.group(1).strip()
+                    if 3 <= len(name) <= 40:
+                        names.add(name)
+
+        # アンカーテキストからも抽出
+        for a in soup.find_all("a", href=True):
+            text = a.get_text(strip=True)
+            for pat in COMPANY_NAME_PATTERNS:
+                m = re.search(pat, text)
+                if m:
+                    name = m.group(1).strip()
+                    if 3 <= len(name) <= 40:
+                        names.add(name)
+
+        # ページ全体テキストからも補完
+        names.update(extract_company_names_from_text(soup.get_text(separator="\n")))
+
+        # ページネーション（?page=N 形式を先に試し、失敗したら /page/N/ 形式）
+        paginated = False
+        for page in range(2, max_pages + 1):
+            page_url = base_url.rstrip("/") + f"?page={page}"
+            try:
+                r = requests.get(page_url, headers=HEADERS, timeout=10)
+                if r.status_code != 200:
+                    break
+                r.encoding = r.apparent_encoding or "utf-8"
+                s = BeautifulSoup(r.text, "html.parser")
+                page_names = extract_company_names_from_text(s.get_text(separator="\n"))
+                if not page_names:
+                    break
+                names.update(page_names)
+                paginated = True
+                time.sleep(random.uniform(0.5, 1.5))
+            except Exception:
+                break
+
+        if not paginated:
+            # ?page=N で取れなかった場合は /page/N/ 形式を試みる
+            for page in range(2, max_pages + 1):
+                page_url = base_url.rstrip("/") + f"/page/{page}/"
+                try:
+                    r = requests.get(page_url, headers=HEADERS, timeout=10)
+                    if r.status_code != 200:
+                        break
+                    r.encoding = r.apparent_encoding or "utf-8"
+                    s = BeautifulSoup(r.text, "html.parser")
+                    page_names = extract_company_names_from_text(s.get_text(separator="\n"))
+                    if not page_names:
+                        break
+                    names.update(page_names)
+                    time.sleep(random.uniform(0.5, 1.5))
+                except Exception:
+                    break
+    except Exception as e:
+        logger.error(f"大同生命アワード取得エラー: {e}")
+    return sorted(names)
+
+
 def scrape_s2_media(list_url: str, max_companies: int = 1000) -> list[dict]:
     """
     S2（健康経営メディア）確定ソースから企業を一括取得。
     取得した企業には source_confirmed_s2=True を付与する。
 
     対応URL:
-      - kenko-keiei.jp  → 既存の scrape_company_list_page() を利用（Excel）
-      - voice-report.jp → _scrape_voice_report()
-      - kenkoukeiei-media.com / daido-kenco-award.jp → _scrape_health_media_list()
+      - kenko-keiei.jp         → scrape_company_list_page()（Excel自動DL）
+      - voice-report.jp        → _scrape_voice_report()
+      - kenkoukeiei-media.com  → _scrape_kenkoukeiei_media()
+      - daido-kenco-award.jp   → _scrape_daido_award()
+      - その他                  → _scrape_health_media_list()（汎用）
     """
     from config import HEALTH_CERT_DOMAINS, HEALTH_MEDIA_DOMAINS
 
@@ -475,11 +598,15 @@ def scrape_s2_media(list_url: str, max_companies: int = 1000) -> list[dict]:
             r["source_confirmed_s1"] = False
         return results
 
-    # アクサ生命ボイスレポート
+    # 媒体別専用スクレイパーにルーティング
     if "voice-report" in domain:
         company_names = _scrape_voice_report(list_url)
+    elif "kenkoukeiei-media" in domain:
+        company_names = _scrape_kenkoukeiei_media(list_url)
+    elif "daido-kenco-award" in domain:
+        company_names = _scrape_daido_award(list_url)
     else:
-        # 健康経営の広場・大同生命等
+        # 上記以外の健康経営メディア（汎用）
         company_names = _scrape_health_media_list(list_url)
 
     logger.info(f"S2媒体({domain}): {len(company_names)}社抽出")
