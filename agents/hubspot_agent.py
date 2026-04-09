@@ -30,19 +30,10 @@ class HubSpotAgent:
     # -------------------------
 
     def check_duplicate(self, company_name: str = "", domain: str = "") -> bool:
-        if domain and self._search_company_by_domain(domain):
-            logger.info(f"重複検出（ドメイン）: {domain}")
+        # 会社名のみで1回チェック（高速化）
+        if company_name and self._search_company_by_name(company_name):
+            logger.info(f"重複検出（会社名）: {company_name}")
             return True
-        if company_name:
-            if self._search_company_by_name(company_name):
-                logger.info(f"重複検出（会社名完全一致）: {company_name}")
-                return True
-            # 法人格を外した名称でもチェック（「株式会社ABC」と「ABC」を同一視）
-            normalized = self._normalize_company_name(company_name)
-            if normalized and normalized != company_name:
-                if self._search_company_by_name(normalized):
-                    logger.info(f"重複検出（会社名正規化）: {company_name} → {normalized}")
-                    return True
         return False
 
     def _search_company_by_domain(self, domain: str) -> bool:

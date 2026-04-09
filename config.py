@@ -15,11 +15,6 @@ HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
 GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
 
-# 登録閾値（MIN_REGISTER_SIGNALSで代替済み。後方互換用に残す）
-AUTO_REGISTER_SCORE = 3
-AUTO_REGISTER_CONFIDENCE = 0
-MIN_PENDING_SCORE = 3
-
 # 出力ファイル
 # Render Disk を使う場合は環境変数 OUTPUT_DIR にマウントパスを設定する
 # 例: OUTPUT_DIR=/opt/render/project/src/output
@@ -386,7 +381,7 @@ def record_domain_fail(domain: str, threshold: int = 3):
 MAX_WORKERS = 5
 
 # Google検索1クエリあたりの取得件数
-MAX_RESULTS_PER_QUERY = 10
+MAX_RESULTS_PER_QUERY = 50
 
 # 検索クールダウン（秒）Googleブロック防止
 SEARCH_DELAY_MIN = 3

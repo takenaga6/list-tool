@@ -584,7 +584,7 @@ def process_one_company(
         )
 
         # スコアが低すぎる or 必須フィールド不足 → 候補にも出さない
-        if score < MIN_PENDING_SCORE or not has_min_fields:
+        if score < MIN_REGISTER_SIGNALS or not has_min_fields:
             logger.debug(
                 f"自動スキップ（スコア{score}点 / 信頼度{confidence} / フィールド:{has_min_fields}）: "
                 f"{company_info.get('company_name') or company_domain}"
@@ -593,7 +593,7 @@ def process_one_company(
             return "ng"
 
         # スコアが高く信頼度も十分かつ必須フィールド全揃い → 確認モードでも自動登録
-        if score >= AUTO_REGISTER_SCORE and confidence >= AUTO_REGISTER_CONFIDENCE and has_auto_fields:
+        if score >= MIN_REGISTER_SIGNALS and has_auto_fields:
             is_dup = hubspot.check_duplicate(
                 company_name=company_info["company_name"],
                 domain=company_domain,
@@ -971,7 +971,7 @@ def run_daemon(interval_minutes: int = 60):
             for list_url in list(MEDIA_LIST_URLS):
                 print(f"\n📋 リストページ取得中: {list_url}")
                 try:
-                    list_results = _scrape_list_with_signal(list_url, max_companies=200)
+                    list_results = _scrape_list_with_signal(list_url, max_companies=1000)
                     print(f"  → {len(list_results)}社を処理開始...")
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                         futures = {
@@ -1128,7 +1128,7 @@ def run_list_daemon(interval_minutes: int = 60):
             for list_url in list(MEDIA_LIST_URLS):
                 print(f"\n📋 リストページ取得中: {list_url}")
                 try:
-                    list_results = _scrape_list_with_signal(list_url, max_companies=200)
+                    list_results = _scrape_list_with_signal(list_url, max_companies=1000)
                     print(f"  → {len(list_results)}社を処理開始...")
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                         futures = {
@@ -1267,7 +1267,7 @@ def update_overview_docs():
     import re as _re
     from config import (
         MEDIA_LIST_URLS, HEALTH_CERT_DOMAINS,
-        AUTO_REGISTER_SCORE, AUTO_REGISTER_CONFIDENCE, MIN_PENDING_SCORE,
+        MIN_REGISTER_SIGNALS,
     )
 
     overview_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OVERVIEW.md")
@@ -1315,8 +1315,8 @@ def update_overview_docs():
 **ランク基準:** A=6点以上 / B=4〜5点 / C=2〜3点
 
 **自動登録・スキップ閾値:**
-- スコア **{AUTO_REGISTER_SCORE}点以上** かつ 信頼度{AUTO_REGISTER_CONFIDENCE}以上 かつ **必須4フィールド全揃い（会社名・URL・電話・従業員数）** → 自動登録
-- スコア **{MIN_PENDING_SCORE}点未満** または pending最低条件（会社名＋電話or住所）不足 → 候補リストにも出さず自動スキップ
+- スコア **{MIN_REGISTER_SIGNALS}点以上** かつ **必須フィールド（会社名・URL）全揃い** → 自動登録
+- スコア **{MIN_REGISTER_SIGNALS}点未満** または pending最低条件（会社名＋電話or住所）不足 → 候補リストにも出さず自動スキップ
 - 上記以外（中間スコア or フィールド不足） → `pending_review.json` に蓄積して確認待ち"""
 
     # ── マーカー置換 ──────────────────────────────────────────────
@@ -1356,7 +1356,7 @@ def update_overview_docs():
         print("[OK] OVERVIEW.md is already up to date")
 
     print(f"  - media sources: {len(MEDIA_LIST_URLS)} entries")
-    print(f"  - auto-register threshold: score>={AUTO_REGISTER_SCORE} / skip: score<{MIN_PENDING_SCORE}")
+    print(f"  - auto-register threshold: score>={MIN_REGISTER_SIGNALS} / skip: score<{MIN_REGISTER_SIGNALS}")
 
 
 def analyze_feedback():
@@ -1507,12 +1507,12 @@ def analyze_feedback():
         if a_rate < 20:
             suggestions.append(
                 f"Aランクのアポ率が{a_rate:.1f}%と低い "
-                f"→ AUTO_REGISTER_SCORE（現在{AUTO_REGISTER_SCORE}点）の引き上げを検討"
+                f"→ MIN_REGISTER_SIGNALS（現在{MIN_REGISTER_SIGNALS}点）の引き上げを検討"
             )
         elif a_rate >= 40:
             suggestions.append(
                 f"Aランクのアポ率が{a_rate:.1f}%と高い "
-                f"→ AUTO_REGISTER_SCORE（現在{AUTO_REGISTER_SCORE}点）の引き下げで自動登録を増やせる"
+                f"→ MIN_REGISTER_SIGNALS（現在{MIN_REGISTER_SIGNALS}点）の引き下げで自動登録を増やせる"
             )
 
     if matched < 10:

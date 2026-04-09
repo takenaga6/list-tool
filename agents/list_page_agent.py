@@ -453,7 +453,7 @@ def _scrape_health_media_list(list_url: str) -> list[str]:
     return sorted(names)
 
 
-def scrape_s2_media(list_url: str, max_companies: int = 300) -> list[dict]:
+def scrape_s2_media(list_url: str, max_companies: int = 1000) -> list[dict]:
     """
     S2（健康経営メディア）確定ソースから企業を一括取得。
     取得した企業には source_confirmed_s2=True を付与する。
@@ -492,13 +492,13 @@ def scrape_s2_media(list_url: str, max_companies: int = 300) -> list[dict]:
             result["source_confirmed_s2"] = True
             result["source_confirmed_s1"] = False
             results.append(result)
-        time.sleep(random.uniform(1.0, 2.5))
+        time.sleep(0.5)
 
     logger.info(f"S2媒体({domain}) HP取得完了: {len(results)}社")
     return results
 
 
-def scrape_s1_media(list_url: str, max_companies: int = 200) -> list[dict]:
+def scrape_s1_media(list_url: str, max_companies: int = 1000) -> list[dict]:
     """
     S1（PR有料媒体）確定ソースから企業を一括取得。
     取得した企業には source_confirmed_s1=True を付与する。
@@ -514,7 +514,7 @@ def scrape_s1_media(list_url: str, max_companies: int = 200) -> list[dict]:
 # メイン関数
 # ─────────────────────────────────────────────
 
-def scrape_company_list_page(list_url: str, max_companies: int = 200) -> list[dict]:
+def scrape_company_list_page(list_url: str, max_companies: int = 1000) -> list[dict]:
     """
     リストページURLから企業を一括取得し、search_agent形式のリストを返す。
 
@@ -575,7 +575,7 @@ def scrape_company_list_page(list_url: str, max_companies: int = 200) -> list[di
         if result:
             results.append(result)
         # DuckDuckGoレート制限対策
-        time.sleep(random.uniform(1.0, 2.5))
+        time.sleep(0.5)
 
     logger.info(f"HP取得完了: {len(results)}/{min(len(company_names), max_companies)}社")
     return results
