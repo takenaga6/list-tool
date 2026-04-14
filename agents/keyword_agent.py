@@ -103,11 +103,7 @@ INDUSTRY_HEALTH = [
 ]
 
 # ④地域 × 健康経営（首都圏のみ）
-REGION_HEALTH = [
-    "東京 健康経営優良法人 株式会社",
-    "横浜 健康経営 株式会社",
-    "東京都 法定外福利厚生 株式会社",
-]
+REGION_HEALTH = []  # generate_all_queries() で動的生成に移行
 
 # ⑤採用・認定シグナル（成長企業）
 GROWTH_SIGNALS = [
@@ -163,6 +159,25 @@ def generate_all_queries() -> list[str]:
     for media in PR_MEDIA:
         for l1 in CATEGORY_L1:
             queries.append(f"{media} {l1}")
+
+    # 8. 地域 × 媒体名（S1-B検索型）
+    try:
+        from config import SEARCH_REGIONS
+        for media in PR_MEDIA:
+            for region in SEARCH_REGIONS:
+                queries.append(f"{media} {region} 株式会社")
+    except ImportError:
+        pass
+
+    # 9. 地域 × 健康経営（47都道府県）
+    try:
+        from config import SEARCH_REGIONS
+        REGION_SUFFIXES = ["健康経営 株式会社", "健康経営優良法人", "法定外福利厚生 株式会社", "福利厚生 充実 株式会社"]
+        for region in SEARCH_REGIONS:
+            for suffix in REGION_SUFFIXES:
+                queries.append(f"{region} {suffix}")
+    except ImportError:
+        pass
 
     # 重複除去・順序保持
     seen = set()
