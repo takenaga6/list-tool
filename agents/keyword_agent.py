@@ -114,6 +114,30 @@ GROWTH_SIGNALS = [
     "健康経営 表彰 株式会社",
 ]
 
+# ⑥採用媒体 × 福利厚生・健康経営
+RECRUIT_MEDIA = [
+    "doda",
+    "マイナビ転職",
+    "en転職",
+    "type転職",
+    "Indeed",
+    "engage",
+    "ベネフィッツ",
+    "リクナビNEXT",
+    "wantedly",
+    "Green",
+]
+
+RECRUIT_SUFFIXES = [
+    "福利厚生充実 株式会社",
+    "福利厚生 マッサージ 株式会社",
+    "福利厚生 健康 株式会社",
+    "健康経営 株式会社",
+    "健康経営優良法人 株式会社",
+    "法定外福利厚生 株式会社",
+    "社員の健康 株式会社",
+]
+
 # ===== クエリ品質フィルタ閾値 =====
 NG_SKIP_THRESHOLD = 0.9   # NG率90%以上のクエリは末尾に回す
 MIN_RUNS_FOR_NG_CHECK = 3  # 最低3回実行後に判定
@@ -160,7 +184,12 @@ def generate_all_queries() -> list[str]:
         for l1 in CATEGORY_L1:
             queries.append(f"{media} {l1}")
 
-    # 8. 地域 × 媒体名（S1-B検索型）
+    # 8. 採用媒体 × 福利厚生・健康経営
+    for media in RECRUIT_MEDIA:
+        for suffix in RECRUIT_SUFFIXES:
+            queries.append(f"{media} {suffix}")
+
+    # 9. 地域 × 媒体名（S1-B検索型）
     try:
         from config import SEARCH_REGIONS
         for media in PR_MEDIA:
@@ -169,7 +198,7 @@ def generate_all_queries() -> list[str]:
     except ImportError:
         pass
 
-    # 9. 地域 × 健康経営（47都道府県）
+    # 10. 地域 × 健康経営（47都道府県）
     try:
         from config import SEARCH_REGIONS
         REGION_SUFFIXES = ["健康経営 株式会社", "健康経営優良法人", "法定外福利厚生 株式会社", "福利厚生 充実 株式会社"]
