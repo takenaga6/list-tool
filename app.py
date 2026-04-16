@@ -1,29 +1,23 @@
 """
 Offi-Stretch リストアップ管理
 起動: streamlit run app.py
-タブ: ダッシュボード / 取り込み / リストアップ / システム診断 / 利用者フィードバック
+タブ: リストアップ / システム診断 / 利用者フィードバック
 
 架電ツール（架電先リスト・見込みリスト・確認待ち・履歴・商談一覧）は
 pages/1_架電ツール.py に分離済み。
 """
 
 import os
-import io
 import subprocess
 import sys
-import re as _re
 import pandas as pd
 import streamlit as st
 
 from config import (
-    FEEDBACK_FILE, RESULTS_FILE,
-    IMPORT_SETTINGS_FILE, USER_FEEDBACK_FILE, OUTPUT_DIR,
+    USER_FEEDBACK_FILE, OUTPUT_DIR,
 )
 from call_tool_utils import (
     apply_global_styles,
-    load_feedback,
-    _load_import_settings, _save_import_settings,
-    _load_team_members, _save_team_members,
     _load_listup_workers, _increment_listup_worker,
     _show_pending_review_ui,
     _LIST_TOOL_DIR,
@@ -113,146 +107,9 @@ apply_global_styles("リスト管理")
 # ──────────────────────────────
 # タブ定義
 # ──────────────────────────────
-tab_analysis, tab_import, tab_listup, tab_monitor, tab_user_fb = st.tabs(
-    ["ダッシュボード", "取り込み", "リストアップ", "システム診断", "利用者フィードバック"]
+tab_listup, tab_monitor, tab_user_fb = st.tabs(
+    ["リストアップ", "システム診断", "利用者フィードバック"]
 )
-
-
-# ──────────────────────────────
-# TAB: 取り込み（営業分析シートCSV → feedback.csv）
-# ──────────────────────────────
-with tab_import:
-    st.subheader("営業シートCSVをインポート")
-    st.caption("「2025営業分析シート」などの商談記録CSVをfeedback.csvに一括取り込みします。")
-
-    uploaded = st.file_uploader("CSVファイルを選択", type=["csv"])
-
-    if uploaded:
-        raw = uploaded.read()
-        for enc in ("utf-8-sig", "shift-jis", "cp932", "utf-8"):
-            try:
-                text = raw.decode(enc)
-                break
-            except Exception:
-                text = None
-
-        if not text:
-            st.error("文字コードを判別できませんでした。UTF-8またはShift-JIS形式で保存してください。")
-        else:
-            lines = text.splitlines()
-
-            header_idx = next(
-                (i for i, line in enumerate(lines) if "会社名" in line),
-                None,
-            )
-            if header_idx is None:
-                st.error("「会社名」列が見つかりません。ヘッダー行を確認してください。")
-            else:
-                df_raw = pd.read_csv(
-                    io.StringIO("\n".join(lines[header_idx:])),
-                    dtype=str,
-                ).fillna("")
-
-                st.markdown(f"**読み込み: {len(df_raw)}行 / {len(df_raw.columns)}列**")
-                st.dataframe(df_raw.head(5), width="stretch", hide_index=True)
-
-                st.divider()
-                st.markdown("### 列マッピング設定")
-
-                cols = ["（使わない）"] + df_raw.columns.tolist()
-
-                def pick(label, default_keywords, idx_fallback="（使わない）"):
-                    default = idx_fallback
-                    for kw in default_keywords:
-                        match = next((c for c in df_raw.columns if kw in c), None)
-                        if match:
-                            default = match
-                            break
-                    return st.selectbox(label, cols, index=cols.index(default))
-
-                col_m1, col_m2 = st.columns(2)
-                with col_m1:
-                    col_date    = pick("日付列",     ["日付", "date"])
-                    col_company = pick("会社名列",   ["会社名"])
-                    col_result  = pick("商談結果列", ["商談結果", "結果"])
-                    col_reject  = pick("断り理由列", ["断り", "懸念"])
-                with col_m2:
-                    col_temp    = pick("温度感列",   ["温度感", "温度"])
-                    col_memo    = pick("メモ列",     ["リスト課題詳細", "メモ", "備考"])
-                    col_url     = pick("URL列",      ["URL", "url"])
-
-                st.markdown("**アポ獲得と判定するキーワード**（商談結果列の値）")
-                apo_keywords_input = st.text_input(
-                    "カンマ区切りで入力",
-                    value="体験会確定,体験会決定,契約",
-                )
-                apo_keywords = [k.strip() for k in apo_keywords_input.split(",") if k.strip()]
-
-                st.divider()
-
-                def convert_row(row):
-                    company = row.get(col_company, "").strip() if col_company != "（使わない）" else ""
-                    if not company or company in ("会社名", "No.", ""):
-                        return None
-                    result  = row.get(col_result, "").strip()  if col_result  != "（使わない）" else ""
-                    reject  = row.get(col_reject, "").strip()  if col_reject  != "（使わない）" else ""
-                    temp    = row.get(col_temp,   "").strip()  if col_temp    != "（使わない）" else ""
-                    memo    = row.get(col_memo,   "").strip()  if col_memo    != "（使わない）" else ""
-                    url     = row.get(col_url,    "").strip()  if col_url     != "（使わない）" else ""
-                    date    = row.get(col_date,   "").strip()  if col_date    != "（使わない）" else ""
-
-                    got_apo = any(kw in result for kw in apo_keywords)
-                    memo_parts = [p for p in [memo, f"URL: {url}" if url else ""] if p]
-
-                    return {
-                        "記録日":              date or "",
-                        "会社名":              company,
-                        "アプローチ結果":       result,
-                        "アポ獲得":            "はい" if got_apo else "いいえ",
-                        "断り理由":            reject,
-                        "温度感":              temp,
-                        "反応が良かったポイント": "",
-                        "メモ":               " / ".join(memo_parts),
-                    }
-
-                preview_rows = [r for r in (convert_row(row) for _, row in df_raw.iterrows()) if r]
-
-                st.markdown(f"**変換プレビュー（先頭5件）**  ※合計 {len(preview_rows)} 件")
-                if preview_rows:
-                    st.dataframe(pd.DataFrame(preview_rows[:5]), width="stretch", hide_index=True)
-
-                    if col_memo != "（使わない）" and col_memo in df_raw.columns:
-                        issues = [
-                            r[col_memo] for _, r in df_raw.iterrows()
-                            if r.get(col_memo, "").strip() not in ("", "FALSE", "False")
-                        ]
-                        if issues:
-                            st.warning(
-                                f"⚠️ **リスト課題あり: {len(issues)}件**  \n"
-                                "→ 以下の理由はNG条件の改善ヒントです（`config.py` の `NG_INDUSTRY_KEYWORDS` 追加を検討）\n\n"
-                                + "\n".join(f"- {i}" for i in issues[:10])
-                            )
-
-                    df_fb = load_feedback()
-                    existing_names = set(df_fb["会社名"].dropna().tolist()) if not df_fb.empty else set()
-                    new_rows = [r for r in preview_rows if r["会社名"] not in existing_names]
-                    dup_count = len(preview_rows) - len(new_rows)
-                    if dup_count:
-                        st.info(f"既にfeedback.csvに存在する会社名: {dup_count}件（スキップ）")
-
-                    if st.button(f"✅ {len(new_rows)}件をfeedback.csvに取り込む", type="primary", disabled=len(new_rows) == 0):
-                        import csv as _csv
-                        os.makedirs(OUTPUT_DIR, exist_ok=True)
-                        file_exists = os.path.exists(FEEDBACK_FILE) and os.path.getsize(FEEDBACK_FILE) > 0
-                        fieldnames = ["記録日", "会社名", "アプローチ結果", "アポ獲得", "断り理由", "温度感", "反応が良かったポイント", "メモ"]
-                        with open(FEEDBACK_FILE, "a", newline="", encoding="utf-8-sig") as f:
-                            writer = _csv.DictWriter(f, fieldnames=fieldnames)
-                            if not file_exists:
-                                writer.writeheader()
-                            for r in new_rows:
-                                writer.writerow(r)
-                        st.success(f"✅ {len(new_rows)}件を取り込みました。「ダッシュボード」タブで確認できます。")
-                        st.rerun()
 
 
 # ──────────────────────────────
@@ -505,116 +362,6 @@ with tab_listup:
 # ──────────────────────────────
 with tab_monitor:
     st.subheader("システム診断")
-    # ── チームメンバー設定 ──────────────────────────────────────────
-    st.divider()
-    st.markdown("#### チームメンバー設定（架電担当者の自動割り振り）")
-    st.caption("登録したメンバーに、HubSpot自動補充の新規リストをラウンドロビンで割り当てます。未登録の場合はトリガーした担当者に全件割り当てられます。")
-
-    _tm_current = _load_team_members()
-
-    if _tm_current:
-        st.markdown("**登録済みメンバー：**")
-        for _tm_name in _tm_current:
-            _tm_col_name, _tm_col_del = st.columns([4, 1])
-            with _tm_col_name:
-                st.markdown(f"・{_tm_name}")
-            with _tm_col_del:
-                if st.button("削除", key=f"tm_del_{_tm_name}"):
-                    _tm_new = [n for n in _tm_current if n != _tm_name]
-                    _save_team_members(_tm_new)
-                    st.rerun()
-    else:
-        st.caption("メンバーが登録されていません。")
-
-    _tm_add_col, _tm_btn_col = st.columns([3, 1])
-    with _tm_add_col:
-        _tm_new_name = st.text_input("メンバー名を追加", placeholder="例: 野村", key="tm_new_name")
-    with _tm_btn_col:
-        st.markdown("　")
-        if st.button("追加", type="primary", key="tm_add_btn"):
-            _tm_new_name_stripped = _tm_new_name.strip()
-            if _tm_new_name_stripped and _tm_new_name_stripped not in _tm_current:
-                _save_team_members(_tm_current + [_tm_new_name_stripped])
-                st.success(f"「{_tm_new_name_stripped}」を追加しました。")
-                st.rerun()
-            elif _tm_new_name_stripped in _tm_current:
-                st.warning("すでに登録されています。")
-            else:
-                st.warning("名前を入力してください。")
-
-    # ── 自動補充リスト設定 ──────────────────────────────────────────
-    st.divider()
-    st.markdown("#### 自動補充リスト設定")
-    st.caption("架電担当者のリスト残数が50件を切ったとき、どのHubSpotリストから補充するかを設定します。未設定の場合はHubSpot全企業が対象になります。")
-
-    from config import HUBSPOT_TOKEN as _MON_HS_TOKEN
-    if not _MON_HS_TOKEN:
-        st.info("💡 HubSpot連携には環境変数 `HUBSPOT_TOKEN` の設定が必要です。")
-    else:
-        _cur_refill = _load_import_settings("auto_refill_list")
-        _cur_list_id = _cur_refill.get("list_id", "")
-        _cur_list_name = _cur_refill.get("list_name", "")
-
-        if "mon_hs_lists_cache" not in st.session_state:
-            import requests as _mon_req
-            _mon_h = {"Authorization": f"Bearer {_MON_HS_TOKEN}", "Content-Type": "application/json"}
-            try:
-                _mon_lr = _mon_req.post(
-                    "https://api.hubapi.com/crm/v3/lists/search",
-                    headers=_mon_h,
-                    json={"objectTypeId": "0-2", "processingTypes": ["DYNAMIC", "MANUAL", "SNAPSHOT"], "count": 200, "offset": 0},
-                    timeout=15,
-                )
-                if _mon_lr.ok:
-                    _mon_raw = _mon_lr.json().get("lists") or _mon_lr.json().get("results", [])
-                    st.session_state["mon_hs_lists_cache"] = [
-                        {"listId": str(l.get("listId") or l.get("id") or ""), "name": l.get("name") or ""}
-                        for l in _mon_raw if (l.get("name") and (l.get("listId") or l.get("id")))
-                    ]
-                else:
-                    st.session_state["mon_hs_lists_cache"] = []
-            except Exception:
-                st.session_state["mon_hs_lists_cache"] = []
-
-        _mon_lists = st.session_state.get("mon_hs_lists_cache", [])
-        _mon_options = ["全企業（指定なし）"] + [f"{l['name']}  [{l['listId']}]" for l in _mon_lists]
-
-        _mon_default_idx = 0
-        if _cur_list_id:
-            for _i, _opt in enumerate(_mon_options):
-                if f"[{_cur_list_id}]" in _opt:
-                    _mon_default_idx = _i
-                    break
-
-        _mon_col1, _mon_col2 = st.columns([3, 1])
-        with _mon_col1:
-            _mon_selected = st.selectbox(
-                "補充元リスト",
-                options=_mon_options,
-                index=_mon_default_idx,
-                key="mon_refill_list_select",
-            )
-        with _mon_col2:
-            st.markdown("　")
-            if st.button("🔄 リスト更新", key="mon_refresh_lists", width="stretch"):
-                del st.session_state["mon_hs_lists_cache"]
-                st.rerun()
-
-        if _cur_list_id:
-            st.caption(f"現在の設定: **{_cur_list_name}** （ID: {_cur_list_id}）")
-        else:
-            st.caption("現在の設定: **全企業（指定なし）**")
-
-        if st.button("💾 設定を保存", type="primary", key="mon_save_refill_list"):
-            if _mon_selected == "全企業（指定なし）":
-                _save_import_settings("auto_refill_list", {"list_id": "", "list_name": ""})
-                st.success("設定を保存しました（全企業モード）")
-            elif "[" in _mon_selected:
-                _save_lid = _mon_selected.split("[")[-1].rstrip("]").strip()
-                _save_lname = _mon_selected.split("  [")[0].strip()
-                _save_import_settings("auto_refill_list", {"list_id": _save_lid, "list_name": _save_lname})
-                st.success(f"設定を保存しました → **{_save_lname}** から補充します")
-            st.rerun()
 
 
 # ──────────────────────────────
