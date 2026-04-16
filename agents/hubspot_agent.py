@@ -43,22 +43,6 @@ class HubSpotAgent:
             return True
         return False
 
-    def _search_company_by_domain(self, domain: str) -> bool:
-        url = f"{self.base_url}/crm/v3/objects/companies/search"
-        payload = {
-            "filterGroups": [{"filters": [{
-                "propertyName": "domain", "operator": "EQ", "value": domain
-            }]}],
-            "limit": 1,
-        }
-        try:
-            resp = requests.post(url, json=payload, headers=self.headers, timeout=10)
-            if resp.ok:
-                return resp.json().get("total", 0) > 0
-        except Exception as e:
-            logger.error(f"HubSpotドメイン検索エラー: {e}")
-        return False
-
     def _search_company_by_name(self, name: str) -> bool:
         url = f"{self.base_url}/crm/v3/objects/companies/search"
         payload = {

@@ -102,9 +102,6 @@ INDUSTRY_HEALTH = [
     "商社 健康経営 福利厚生",
 ]
 
-# ④地域 × 健康経営（首都圏のみ）
-REGION_HEALTH = []  # generate_all_queries() で動的生成に移行
-
 # ⑤採用・認定シグナル（成長企業）
 GROWTH_SIGNALS = [
     "中途採用 健康経営 株式会社",
@@ -172,10 +169,7 @@ def generate_all_queries() -> list[str]:
     # 4. 業種 × 健康経営
     queries.extend(INDUSTRY_HEALTH)
 
-    # 5. 地域 × 健康経営
-    queries.extend(REGION_HEALTH)
-
-    # 6. 採用・認定シグナル
+    # 5. 採用・認定シグナル
     queries.extend(GROWTH_SIGNALS)
 
     # 7. 媒体名 × 大分類（汎用）

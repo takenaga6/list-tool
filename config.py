@@ -662,8 +662,3 @@ SEARCH_PERIODS = [
     "qdr:m6",   # 6ヶ月以内
     "qdr:y",    # 1年以内
 ]
-
-# 採用媒体（福利厚生検索用 - 将来実装）
-RECRUIT_MEDIA_URLS = [
-    {"name": "ベネフィッツ", "url": "https://bene-fits.jp/company/search?keyword=&order_type=2&orderby=2"},
-]
