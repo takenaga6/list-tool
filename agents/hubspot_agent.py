@@ -123,11 +123,13 @@ class HubSpotAgent:
     # 企業・担当者登録
     # -------------------------
 
-    def register_company(self, company_data: dict, media_name: str = "") -> bool:
+    def register_company(self, company_data: dict, media_name: str = "", signals: dict = None) -> bool:
         """
         HubSpotに企業（Company）と代表者（Contact）を登録する
         media_name: PR媒体名。MEDIA_TO_N1に一致すればn_1に、S2媒体ならn_13="有り"に書き込む。
-        空文字の場合はcompany_data["media_name"]を参照する。
+                    空文字の場合はcompany_data["media_name"]を参照する。
+        signals:    S3〜S6シグナル判定結果 {"s3": bool, "s4": bool, "s5": bool, "s6": bool}。
+                    Noneまたは空の場合はcompany_data["signals"]を参照する。
         """
         domain = self._extract_domain(company_data.get("company_url", ""))
 
@@ -155,6 +157,22 @@ class HubSpotAgent:
         elif _media and MEDIA_TO_N1.get(_media):
             # S1媒体はn_1（PR有料媒体の種類）に媒体名選択肢値を書く
             company_props["n_1"] = MEDIA_TO_N1[_media]
+
+        # S3〜S6シグナル判定結果をbool型プロパティに書き込む
+        # signals引数 > company_data["signals"] の優先順。None/空ならスキップ。
+        _signals = signals or company_data.get("signals") or {}
+        if _signals:
+            # HubSpotのbool型はJSON文字列 "true"/"false" で送る
+            _SIGNAL_PROP_MAP = {
+                "S3": "houteigaifukurikouseinokisaiari",   # 法定外福利厚生の記載あり
+                "S4": "kenkoukeieihenochuuryoku",           # 健康経営への注力
+                "S5": "hantoshiinaihprinyuaru",             # 半年以内HPリニューアル
+                "S6": "jishabiruhoyuu",                    # 自社ビル保有
+            }
+            for _sig_key, _prop_name in _SIGNAL_PROP_MAP.items():
+                _val = _signals.get(_sig_key)
+                if _val is not None:
+                    company_props[_prop_name] = "true" if _val else "false"
 
         # 空文字・Noneを除去
         company_props = {k: v for k, v in company_props.items() if v}
