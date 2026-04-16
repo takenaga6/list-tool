@@ -14,6 +14,66 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# ──────────────────────────────────────────────────────────
+# PR有料媒体名 → HubSpot n_1（PR有料媒体の種類）選択肢値のマッピング
+# コード内の媒体名文字列をキーに、HubSpotのenumeration valueを値とする。
+# ──────────────────────────────────────────────────────────
+MEDIA_TO_N1: dict[str, str] = {
+    "KENJA GLOBAL":                       "KENJA GLOBAL",
+    "エコノミスト ビジネスクロニクル":         "エコノミスト ビジネスクロニクル",
+    "エコノミスト REC":                     "エコノミスト ビジネスクロニクル",
+    "Newsweek WEB":                       "Newsweek CHALLENGER",
+    "Newsweek Challenger":                "Newsweek CHALLENGER",
+    "Newsweek CHALLENGING INNOVATOR":     "Newsweek CHALLENGING INNOVATOR",
+    "時代のニューウェーブ":                  "日経CNBC「時代のニューウェーブ」",
+    "j-newwave.com":                      "日経CNBC「時代のニューウェーブ」",
+    "Leaders AWARD":                      "20万人の学生が選ぶ「LEADER'S AWARD」",
+    "B-PLUS":                             "B-plus",
+    "B-plus":                             "B-plus",
+    "SUPER CEO":                          "その他有料媒体",
+    "SMB Excellent AWARD":               "その他有料媒体",
+    "For JAPAN":                          "その他有料媒体",
+    "BS TIMES":                           "その他有料媒体",
+    "ベンチャー通信":                       "その他有料媒体",
+    "カンパニータンク":                     "その他有料媒体",
+    "社長名鑑":                            "その他有料媒体",
+    "経営者プライム":                       "その他有料媒体",
+    "リーダーナビ":                         "その他有料媒体",
+    "Fanterview":                         "その他有料媒体",
+    "経営者通信":                           "その他有料媒体",
+    "先見経済":                            "その他有料媒体",
+    "企業と経営":                           "その他有料媒体",
+    "サンデー毎日「会社の流儀」":             "サンデー毎日「会社の流儀」",
+    "AERA「Business Report」":            "AERA「Business Report」",
+    "週刊新潮「リーディングカンパニー」":      "週刊新潮「リーディングカンパニー」",
+    "注目企業ONLINE":                      "注目企業ONLINEオリジナル",
+    "オリジナルTHE 21「BUSINESS REPORT」": "THE 21「BUSINESS REPORT」",
+    "週刊新潮「チャレンジカンパニー」":        "週刊新潮「チャレンジカンパニー」",
+    "週刊朝日「Challenge 20◯◯」":         "週刊朝日「Challenge 20◯◯」",
+    "週刊文春「会社の実力」":                "週刊文春「会社の実力」",
+    "幻冬舎メディアコンサルティング":          "幻冬舎メディアコンサルティング（自費出版）",
+    "文芸社":                              "文芸社（自費出版）",
+    "ダイヤモンド（自費出版）":              "ダイヤモンド（自費出版）",
+    "日経クロスメディア":                    "日経クロスメディア（自費出版）",
+    "私のカクゴ":                           "私のカクゴ",
+    "QualitasB-plus":                     "QualitasB-plus",
+    "月刊企業情報誌『ルーツ』":              "月刊企業情報誌『ルーツ』",
+    "月刊企業情報誌「Anchor」":             "月刊企業情報誌「Anchor」",
+    "月刊企業情報誌「Masters」":            "月刊企業情報誌「Masters」",
+    "月刊企業情報誌「CENTURY」":            "月刊企業情報誌「CENTURY」",
+    "NewsPicks「PR記事」":                 "NewsPicks「PR記事」",
+    "東京MXビジネス番組":                   "東京MXビジネス番組",
+    "異業種ネット":                         "異業種ネット",
+}
+
+# S2媒体名のセット（n_1ではなく n_13="有り" を書く）
+_S2_MEDIA_NAMES: set[str] = {
+    "健康経営優良法人",
+    "アクサ生命ボイスレポート",
+    "健康経営の広場",
+    "大同生命",
+}
+
 
 class HubSpotAgent:
     def __init__(self, token: str, ng_list_file: str):
@@ -63,9 +123,11 @@ class HubSpotAgent:
     # 企業・担当者登録
     # -------------------------
 
-    def register_company(self, company_data: dict) -> bool:
+    def register_company(self, company_data: dict, media_name: str = "") -> bool:
         """
         HubSpotに企業（Company）と代表者（Contact）を登録する
+        media_name: PR媒体名。MEDIA_TO_N1に一致すればn_1に、S2媒体ならn_13="有り"に書き込む。
+        空文字の場合はcompany_data["media_name"]を参照する。
         """
         domain = self._extract_domain(company_data.get("company_url", ""))
 
@@ -84,6 +146,16 @@ class HubSpotAgent:
             "city":              company_data.get("prefecture", ""),  # 都道府県をcityにも入れる
             "a_12":              company_data.get("rank", ""),        # リストランク（A/B/C）
         }
+
+        # n_1 / n_13 の書き込み（media_name引数 > company_data["media_name"] の優先順）
+        _media = media_name or company_data.get("media_name", "")
+        if _media in _S2_MEDIA_NAMES:
+            # S2媒体はn_13（PR・広告の有料媒体の有無）に "有り" を書く
+            company_props["n_13"] = "有り"
+        elif _media and MEDIA_TO_N1.get(_media):
+            # S1媒体はn_1（PR有料媒体の種類）に媒体名選択肢値を書く
+            company_props["n_1"] = MEDIA_TO_N1[_media]
+
         # 空文字・Noneを除去
         company_props = {k: v for k, v in company_props.items() if v}
 

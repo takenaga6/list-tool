@@ -581,6 +581,27 @@ def process_one_company(
         else:
             list_source = f"検索クエリ: {search_result['search_query']}"
 
+        # n_1/n_13書き込み用のメディア名を特定してcompany_infoに格納
+        _media_name = ""
+        if source_list_url:
+            # リストページ経由: media_labelが逆引きできた場合のみ使用
+            if media_label != source_list_url:
+                _media_name = media_label
+            else:
+                # MEDIA_NAME_TO_DOMAINにないURL（kenko-keiei.jp等）を別途マッピング
+                from config import HEALTH_CERT_DOMAINS
+                if any(d in source_list_url for d in HEALTH_CERT_DOMAINS):
+                    _media_name = "健康経営優良法人"
+        else:
+            # キーワード検索経由: search_queryの先頭がPR_MEDIA名と一致するか確認
+            _sq = search_result.get("search_query", "")
+            from agents.keyword_agent import PR_MEDIA as _PR_MEDIA_LIST
+            for _m in _PR_MEDIA_LIST:
+                if _sq.startswith(_m):
+                    _media_name = _m
+                    break
+        company_info["media_name"] = _media_name
+
         # 備考：リストアップ元 + 媒体記事URL + ランク理由
         notes_parts = [f"リストアップ元: {list_source}"]
         if media_article_url:
