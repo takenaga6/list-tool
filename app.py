@@ -14,19 +14,14 @@ import sys
 import re as _re
 import pandas as pd
 import streamlit as st
-import altair as alt
 
 from config import (
-    FEEDBACK_FILE, RESULTS_FILE, MEETINGS_FILE,
-    CALL_LIST_FILE, IMPORT_SETTINGS_FILE, USER_FEEDBACK_FILE, OUTPUT_DIR,
-    record_feedback,
+    FEEDBACK_FILE, RESULTS_FILE,
+    IMPORT_SETTINGS_FILE, USER_FEEDBACK_FILE, OUTPUT_DIR,
 )
 from call_tool_utils import (
     apply_global_styles,
-    _APPROACH_OPTIONS,
-    load_feedback, load_call_list, update_call_list_row,
-    load_meetings,
-    _auto_refill_from_hubspot,
+    load_feedback,
     _load_import_settings, _save_import_settings,
     _load_team_members, _save_team_members,
     _load_listup_workers, _increment_listup_worker,
@@ -121,64 +116,6 @@ apply_global_styles("リスト管理")
 tab_analysis, tab_import, tab_listup, tab_monitor, tab_user_fb = st.tabs(
     ["ダッシュボード", "取り込み", "リストアップ", "システム診断", "利用者フィードバック"]
 )
-
-# 架電先リストをスクリプト実行ごとに1回だけ読み込む
-_df_call_list = load_call_list()
-
-
-# ──────────────────────────────
-# TAB: ダッシュボード
-# ──────────────────────────────
-with tab_analysis:
-    st.subheader("ダッシュボード")
-
-    dash_integrated, = st.tabs(["📊 統合"])
-
-    # ── 統合ダッシュボード ──────────────────────────────────────────
-    with dash_integrated:
-        _df_fb_d = load_feedback()
-        _df_mt_d = load_meetings() if os.path.exists(MEETINGS_FILE) else pd.DataFrame()
-
-        _total_calls  = len(_df_fb_d)
-        _total_mtgs   = len(_df_mt_d) if not _df_mt_d.empty else 0
-        _apo_d        = (_df_fb_d["アポ獲得"] == "はい").sum() if not _df_fb_d.empty else 0
-        _contract_d   = (_df_mt_d["契約"] == "はい").sum() if (not _df_mt_d.empty and "契約" in _df_mt_d.columns) else 0
-
-        dk1, dk2, dk3, dk4 = st.columns(4)
-        dk1.metric("総架電数",    f"{_total_calls}件")
-        dk2.metric("アポ獲得数",  f"{_apo_d}件")
-        dk3.metric("総商談数",    f"{_total_mtgs}件")
-        dk4.metric("契約件数",    f"{_contract_d}件")
-
-        if not _df_fb_d.empty and "担当名" in _df_fb_d.columns:
-            _tanto_col = _df_fb_d[_df_fb_d["担当名"].notna() & (_df_fb_d["担当名"] != "")]
-            if not _tanto_col.empty:
-                st.divider()
-                st.markdown("**担当者別サマリー**")
-                _tanto_summary = _tanto_col.groupby("担当名").agg(
-                    架電数=("会社名", "count"),
-                    アポ数=("アポ獲得", lambda x: (x == "はい").sum()),
-                ).reset_index()
-                _tanto_summary["アポ率(%)"] = (_tanto_summary["アポ数"] / _tanto_summary["架電数"] * 100).round(1)
-
-                if not _df_mt_d.empty and "担当名" in _df_mt_d.columns:
-                    _mt_tanto = _df_mt_d[_df_mt_d["担当名"].notna() & (_df_mt_d["担当名"] != "")].groupby("担当名").agg(
-                        商談数=("会社名", "count"),
-                        契約数=("契約", lambda x: (x == "はい").sum()),
-                    ).reset_index()
-                    _tanto_summary = _tanto_summary.merge(_mt_tanto, on="担当名", how="left").fillna(0)
-                    _tanto_summary["商談数"] = _tanto_summary["商談数"].astype(int)
-                    _tanto_summary["契約数"] = _tanto_summary["契約数"].astype(int)
-
-                st.dataframe(_tanto_summary, width="stretch", hide_index=True)
-
-                _tanto_chart = alt.Chart(_tanto_summary).mark_bar(color="#4C78A8").encode(
-                    x=alt.X("担当名:N", axis=alt.Axis(labelAngle=0, labelFontSize=13)),
-                    y=alt.Y("架電数:Q"),
-                    tooltip=["担当名", "架電数", "アポ数", "アポ率(%)"],
-                ).properties(height=220, title="担当者別 架電数")
-                st.altair_chart(_tanto_chart, width="stretch")
-
 
 
 # ──────────────────────────────
@@ -499,81 +436,6 @@ with tab_listup:
         st.divider()
         st.caption("前回の確認モード結果が残っています。")
         _show_pending_review_ui()
-
-    st.divider()
-    with st.expander("📞 架電記録（リストアップ中でも入力できます）", expanded=False):
-        _lu_df_cl = _df_call_list
-        if _lu_df_cl.empty:
-            st.info("架電先リストが空です。リストアップ後に入力できます。")
-        else:
-            _lu_il_persons = ["全員"] + sorted(
-                _lu_df_cl["架電担当者名"].dropna().replace("", pd.NA).dropna().unique().tolist()
-            )
-            _lu_il_person_filt = st.selectbox("架電担当者名で絞り込む", _lu_il_persons, key="lu_il_person_filt")
-            if _lu_il_person_filt == "全員":
-                _lu_company_opts = _lu_df_cl["会社名"].tolist()
-            else:
-                _lu_company_opts = _lu_df_cl[_lu_df_cl["架電担当者名"] == _lu_il_person_filt]["会社名"].tolist()
-
-            if not _lu_company_opts:
-                st.caption("該当する会社がありません。")
-            else:
-                _lu_selected = st.selectbox("会社を選択", _lu_company_opts, key="lu_il_company")
-                _lu_row = _lu_df_cl[_lu_df_cl["会社名"] == _lu_selected].iloc[0]
-
-                _lu_phone = _lu_row.get("電話番号", "") or "―"
-                _lu_rank  = _lu_row.get("リストランク", "") or "―"
-                st.info(f"📞 **{_lu_phone}**　ランク: {_lu_rank}　前回: {_lu_row.get('アプローチ内容','') or 'なし'}")
-
-                _lu_c1, _lu_c2 = st.columns(2)
-                with _lu_c1:
-                    from datetime import date as _lu_date
-                    _lu_ap_date = st.date_input("アプローチ日", value=_lu_date.today(), key="lu_il_apdate")
-                    _lu_tanto = st.text_input(
-                        "架電担当者名",
-                        value=_lu_row.get("架電担当者名", ""),
-                        key="lu_il_tanto",
-                    )
-                    _lu_apo = st.selectbox("アポ獲得", ["", "○", "×"], key="lu_il_apo")
-                with _lu_c2:
-                    _lu_result = st.selectbox(
-                        "アプローチ内容（架電結果）",
-                        options=_APPROACH_OPTIONS,
-                        key="lu_il_result",
-                    )
-                    _lu_mikomi = st.selectbox("見込み", ["", "A", "B", "C", "D"], key="lu_il_mikomi")
-                    _lu_memo = st.text_area("備考", height=80, key="lu_il_memo")
-                _lu_next = st.date_input("次回アプローチ日（任意）", value=None, key="lu_il_next")
-
-                if st.button("✅ 架電を記録する", type="primary", key="lu_il_submit"):
-                    update_call_list_row(_lu_selected, {
-                        "アプローチ日":    str(_lu_ap_date),
-                        "架電担当者名":    _lu_tanto,
-                        "アポ獲得":        _lu_apo,
-                        "アプローチ内容":  _lu_result,
-                        "見込み":          _lu_mikomi,
-                        "アプローチ備考":  _lu_memo,
-                        "次回アプローチ日": str(_lu_next) if _lu_next else "",
-                    })
-                    record_feedback(
-                        company_name=_lu_selected,
-                        approach_result=_lu_result,
-                        got_appointment=_lu_apo in ("○", "〇"),
-                        temperature=_lu_mikomi,
-                        memo=_lu_memo,
-                        tantosha=_lu_tanto,
-                    )
-                    if _lu_tanto:
-                        with st.spinner(f"「{_lu_tanto}」のリスト残数を確認中..."):
-                            _lu_added, _lu_err = _auto_refill_from_hubspot(_lu_tanto)
-                        if _lu_err:
-                            st.warning(f"記録しました。自動補充エラー: {_lu_err}")
-                        elif _lu_added > 0:
-                            st.info(f"🔄 「{_lu_tanto}」のリスト残数が少ないため {_lu_added}件を自動補充しました")
-                        else:
-                            st.success(f"記録しました: **{_lu_selected}** — {_lu_result}")
-                    else:
-                        st.success(f"記録しました: **{_lu_selected}** — {_lu_result}")
 
     st.divider()
     with st.expander("📡 媒体管理（S1/S2/S3 媒体リストの確認・追加）", expanded=False):
