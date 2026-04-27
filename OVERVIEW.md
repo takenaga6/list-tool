@@ -61,13 +61,6 @@
   │
   └─ 完了レポート
 
-[リストアップ専用デーモン] python main.py --list-daemon [--interval=60]
-  └─ 媒体リスト → キーワード検索を1サイクルとして無限ループ
-  └─ 高スコア＋必須4フィールド揃い → 自動登録 / 中間スコア → pending_review.json に蓄積
-
-[全自動デーモン] python main.py --daemon [--interval=60]
-  └─ 確認なし・全件自動登録モード
-
 [監査] python main.py --audit [--scrape]
   └─ HubSpot登録済み企業を事後チェック → NG企業にフラグ + 学習
 
@@ -191,18 +184,6 @@ list_tool/
 # 通常実行（候補確認・HubSpot登録）
 cd C:\Users\user\list_tool
 python main.py
-
-# リストアップ専用デーモン（常時稼働・中間スコアはpending蓄積）← 推奨
-python main.py --list-daemon
-
-# リストアップ専用デーモン（サイクル間隔を変更 例: 30分ごと）
-python main.py --list-daemon --interval=30
-
-# 全自動デーモン（確認なし・全件登録）
-python main.py --daemon
-
-# 全自動デーモン（サイクル間隔変更）
-python main.py --daemon --interval=30
 
 # HubSpot監査（ドメインチェック＋会社名チェック）
 python main.py --audit

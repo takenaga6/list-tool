@@ -105,7 +105,6 @@ DuckDuckGo: 上記より短く設定済み（1〜3秒）。
 
 DuckDuckGoを主検索エンジンとして使用（Google403対策済み）。
 ただし DuckDuckGo もレートリミットがあるため:
-- daemonモード時は `--interval=60`（デフォルト60分）で間隔を確保
 - MAX_WORKERS を減らすとブロックされにくくなる（デフォルト5）
 
 設定場所: `config.py` — `MAX_WORKERS` / `SEARCH_DELAY_MIN/MAX`
