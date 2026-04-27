@@ -957,7 +957,7 @@ def _show_pending_review_ui():
     pending_path = os.path.join(OUTPUT_DIR, "pending_review.json")
 
     if not os.path.exists(pending_path):
-        st.info("pending_review.json が見つかりません。デーモンを起動するとここにリストが溜まります。")
+        st.info("pending_review.json が見つかりません。リストアップを実行するとここにリストが溜まります。")
         return
 
     with open(pending_path, "r", encoding="utf-8") as _f:
