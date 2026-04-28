@@ -174,6 +174,22 @@ class HubSpotAgent:
                 if _val is not None:
                     company_props[_prop_name] = "true" if _val else "false"
 
+        # Phase 1: 本命条件チェック結果（HubSpot側で6プロパティを手動作成済み）
+        company_props["phase1_must_check_passed"] = (
+            "true" if company_data.get("phase1_must_check_passed", True) else "false"
+        )
+        company_props["phase1_ng_reason"] = company_data.get("phase1_ng_reason", "")
+        company_props["industry_profit_estimate"] = company_data.get("industry_profit_estimate", "")
+        company_props["is_parent_prime_subsidiary"] = (
+            "true" if company_data.get("is_parent_prime_subsidiary", False) else "false"
+        )
+        company_props["has_kenkokeiei_hp"] = (
+            "true" if company_data.get("has_kenkokeiei_hp", False) else "false"
+        )
+        company_props["has_recruit_page"] = (
+            "true" if company_data.get("has_recruit_page", False) else "false"
+        )
+
         # 空文字・Noneを除去
         company_props = {k: v for k, v in company_props.items() if v}
 
