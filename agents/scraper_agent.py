@@ -775,6 +775,7 @@ def scrape_company_info(
                 if pref in text:
                     info["prefecture"] = pref
                     break
+            info["_page_text"] = text
         return info
     # ─────────────────────────────────────────────────────────
 
@@ -852,6 +853,7 @@ def scrape_company_info(
 
     info["employee_count"] = extract_employee_count(all_text)
     info["industry"] = estimate_industry(all_text, info["company_name"])
+    info["_page_text"] = all_text
 
     # フィールドバリデーション（明らかな誤りをクリア + 信頼度スコア付与）
     info = validate_company_info(info)

@@ -32,6 +32,13 @@ from config import (
     LARGE_COMPANY_DOMAINS,
     RANK_A_EXTRA_SIGNALS,
     RANK_B_MIN_SIGNALS,
+    NG_INDUSTRY_KEYWORDS_PHASE1,
+    INDUSTRY_PROFIT_MEDIUM_KEYWORDS,
+    FUKURI_LEGAL_ONLY_OK_INDUSTRY,
+    PARENT_PRIME_KEYWORDS,
+    HEALTH_KEIEI_REQUIRED_KEYWORDS,
+    RECRUIT_PAGE_REQUIRED_KEYWORDS,
+    EMPLOYEE_RANGE_CONFIG,
 )
 
 logger = logging.getLogger(__name__)
@@ -157,7 +164,100 @@ def pre_screen(search_result: dict) -> tuple[bool, str]:
         if ng_kw in text[:300]:
             return False, f"NG業種: {ng_kw}"
 
+    # ⑤ Phase 1: 業種NG（広告/メディア）— スニペット段階
+    for ng_kw in NG_INDUSTRY_KEYWORDS_PHASE1:
+        if ng_kw in text:
+            return False, f"NG業種(広告/メディア): {ng_kw}"
+
+    # ⑥ Phase 1: 従業員数の細分化（スニペットから抽出可能な範囲のみ）
+    emp_match = re.search(r"(?:従業員[数人]?|社員[数人]?)\s*[：:\s]*(\d+)", text)
+    if emp_match:
+        emp_count = int(emp_match.group(1))
+        cfg = EMPLOYEE_RANGE_CONFIG
+        if cfg["blank_zone_min"] <= emp_count <= cfg["blank_zone_max"]:
+            return False, f"空白帯規模({emp_count}名)"
+        if emp_count < cfg["min_special_industry"]:
+            return False, f"極小規模({emp_count}名)"
+
     return True, ""
+
+
+# ─────────────────────────────────────────────
+# Phase 1 必須条件チェック（57社分析からの追加判定）
+# ─────────────────────────────────────────────
+
+def is_special_industry(text: str) -> bool:
+    """士業・投資運用などの「法定のみ福利厚生でもOKな業種」を判定。"""
+    return any(kw in text for kw in FUKURI_LEGAL_ONLY_OK_INDUSTRY)
+
+
+def is_parent_prime_subsidiary(text: str) -> bool:
+    """大手プライム子会社判定。HP全文・会社概要欄からキーワード検出。"""
+    return any(kw in text for kw in PARENT_PRIME_KEYWORDS)
+
+
+def check_phase1_must_conditions(company_info: dict, page_text: str) -> tuple[bool, str]:
+    """Phase 1の必須条件チェック。1つでも違反したらNGとして即除外。
+
+    既存のNG条件チェック後に呼ぶ。HP本文（page_text）が空の場合、
+    健康経営/採用ページ判定はスキップ（既存処理に委ねる）。
+    """
+    company_name = company_info.get("company_name", "")
+    industry = company_info.get("industry", "")
+    full_text = f"{company_name} {industry} {page_text}"
+
+    # ① 業種NG（広告/マーケ/メディア）
+    for ng_kw in NG_INDUSTRY_KEYWORDS_PHASE1:
+        if ng_kw in company_name or ng_kw in industry or ng_kw in page_text[:500]:
+            return False, f"NG業種(広告/メディア): {ng_kw}"
+
+    # ② 業界利益率「中」のレッドオーシャン業種NG（大手プライム子会社は例外）
+    is_prime_sub = is_parent_prime_subsidiary(full_text)
+    for ng_kw in INDUSTRY_PROFIT_MEDIUM_KEYWORDS:
+        if ng_kw in company_name or ng_kw in industry or ng_kw in page_text[:500]:
+            if not is_prime_sub:
+                return False, f"レッドオーシャン業界(利益率中): {ng_kw}"
+
+    # ③④ HP本文がある時のみ判定（pre_screen段階・スニペット限定処理では空）
+    if page_text:
+        # ③ HP健康経営記載なしNG
+        if not any(kw in page_text for kw in HEALTH_KEIEI_REQUIRED_KEYWORDS):
+            return False, "HP健康経営記載なし"
+
+        # ④ HP採用情報なしNG
+        if not any(kw in page_text for kw in RECRUIT_PAGE_REQUIRED_KEYWORDS):
+            return False, "HP採用情報なし"
+
+        # ⑤ 福利厚生「法定のみ」NG（士業・投資運用は例外）
+        has_welfare = any(kw in page_text for kw in WELFARE_KEYWORDS)
+        if not has_welfare and not is_special_industry(full_text):
+            return False, "福利厚生記載なし(士業以外)"
+
+    # ⑥ 従業員数フィルター細分化
+    emp_count_str = company_info.get("employee_count", "")
+    if emp_count_str:
+        try:
+            emp_count = int(re.sub(r"\D", "", str(emp_count_str)))
+        except ValueError:
+            emp_count = None
+        if emp_count is not None and emp_count > 0:
+            cfg = EMPLOYEE_RANGE_CONFIG
+            is_special = is_special_industry(full_text)
+            # 6-9名は士業のみOK
+            if cfg["min_special_industry"] <= emp_count <= cfg["max_special_industry"]:
+                if not is_special:
+                    return False, f"極小規模({emp_count}名)かつ士業以外"
+            # 6名未満はNG
+            elif emp_count < cfg["min_special_industry"]:
+                return False, f"極小規模({emp_count}名)"
+            # 200-499名はNG（空白帯）
+            elif cfg["blank_zone_min"] <= emp_count <= cfg["blank_zone_max"]:
+                return False, f"空白帯規模({emp_count}名)"
+            # 500名以上は大手プライム子会社のみOK
+            elif emp_count >= cfg["large_min"] and not is_prime_sub:
+                return False, f"大規模({emp_count}名)かつ大手プライム子会社でない"
+
+    return True, "OK"
 
 
 # ─────────────────────────────────────────────
@@ -234,6 +334,12 @@ def evaluate_rank(
     branch_m = re.search(r"(\d+)\s*拠点", full_text)
     if branch_m and int(branch_m.group(1)) >= 3:
         return _ng(f"{branch_m.group(1)}拠点（上限超）")
+
+    # ─── Phase 1 必須条件チェック ───────────────────────
+    # 既存NG条件をクリアした社に対してさらに精密チェック（HP本文要）
+    ok, reason = check_phase1_must_conditions(company_info, page_text)
+    if not ok:
+        return _ng(f"Phase1必須条件NG: {reason}")
 
     # ─── S1 判定 ──────────────────────────────────────
     s1 = confirmed_s1

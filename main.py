@@ -548,19 +548,38 @@ def process_one_company(
         company_domain = extract_domain(company_info.get("company_url") or url)
         if company_domain in processed_domains:
             return "skip"
+
         processed_domains.add(company_domain)
 
-        # ランク判定
-        rank_result = evaluate_rank(company_info, [search_result])
+        # ランク判定（Phase 1必須条件はHP本文を必要とするため page_text を渡す）
+        page_text = company_info.get("_page_text", "")
+        rank_result = evaluate_rank(company_info, [search_result], page_text=page_text)
         company_info["rank"] = rank_result["rank"]    # HubSpot a_12 書き込み用
         company_info["signals"] = rank_result.get("signals", {})  # HubSpot S3〜S6 書き込み用
 
         if rank_result["rank"] == "NG":
             _ng_name = company_info.get("company_name") or ""
-            print(f"  ⛔ NGスキップ: {_ng_name or company_domain} [{rank_result['ng_reason']}]")
+            _ng_reason = rank_result.get("ng_reason", "")
+            print(f"  ⛔ NGスキップ: {_ng_name or company_domain} [{_ng_reason}]")
             record_ng(search_result["search_query"])  # NGをクエリ学習に反映
-            add_to_excluded_companies(_ng_name, f"NG: {rank_result.get('ng_reason', '')}")
+            add_to_excluded_companies(_ng_name, f"NG: {_ng_reason}")
+            # Phase 1必須条件NGの場合、理由をcompany_infoに記録（後続のHubSpot書込用）
+            if "Phase1必須条件NG" in _ng_reason:
+                company_info["phase1_must_check_passed"] = False
+                company_info["phase1_ng_reason"] = _ng_reason
             return "ng"
+
+        # ランクが付いた社は必須条件クリア → Phase 1フラグをセット
+        from agents.rank_agent import is_parent_prime_subsidiary
+        _full_text_for_phase1 = (
+            company_info.get("company_name", "") + " "
+            + company_info.get("industry", "") + " "
+            + page_text
+        )
+        company_info["phase1_must_check_passed"] = True
+        company_info["has_kenkokeiei_hp"] = True
+        company_info["has_recruit_page"] = True
+        company_info["is_parent_prime_subsidiary"] = is_parent_prime_subsidiary(_full_text_for_phase1)
 
         # 媒体記事URLを取得（媒体クエリ経由の場合のみ、バックグラウンドで検索）
         media_article_url = find_media_article_url(
