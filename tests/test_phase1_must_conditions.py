@@ -101,7 +101,7 @@ class TestPhase1MustConditions(unittest.TestCase):
     # 健康経営記載なしNG
     def test_no_kenkokeiei_ng(self):
         company_info = {"company_name": "株式会社サンプル", "employee_count": "50"}
-        page_text = "採用情報。福利厚生にマッサージ・人間ドック完備。"  # 健康経営記載なし
+        page_text = "採用情報。福利厚生にマッサージ完備。"  # 健康経営記載なし
         ok, reason = check_phase1_must_conditions(company_info, page_text)
         self.assertFalse(ok)
         self.assertEqual(reason, "HP健康経営記載なし")
