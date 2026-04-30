@@ -126,6 +126,11 @@ def _extract_from_xlsx(content: bytes) -> str:
 # 企業名抽出
 # ─────────────────────────────────────────────
 
+# 数字+ピリオド系・丸囲み数字で始まる断片を除外（Phase 4 Step 2.4）
+# 例: "１．株式会社A、２．株式会社B" の途中切れ "１．株式会社" を除外
+NUMERIC_PREFIX_PATTERN = re.compile(r'^[\d０-９①-⑳][.．、)）]?')
+
+
 def extract_company_names_from_text(text: str) -> list[str]:
     """テキストから企業名（株式会社等）を全て抽出"""
     names = set()
@@ -136,6 +141,15 @@ def extract_company_names_from_text(text: str) -> list[str]:
             if 3 <= len(name) <= 40:
                 # ノイズ除去（数字・記号だけの場合を除外）
                 if re.search(r'[ぁ-んァ-ン一-龯a-zA-Z]', name):
+                    # 数字+ピリオド始まりの断片を除外（ゴミ除去）
+                    # "１．株式会社" "1.株式会社" "①株式会社" 等
+                    if NUMERIC_PREFIX_PATTERN.match(name):
+                        continue
+                    # 企業名表記のみ（前置詞ゼロ）の場合も除外
+                    # "株式会社" "合同会社" 等
+                    if name in ("株式会社", "合同会社", "有限会社",
+                                "一般社団法人", "NPO法人"):
+                        continue
                     names.add(name)
     return sorted(names)
 

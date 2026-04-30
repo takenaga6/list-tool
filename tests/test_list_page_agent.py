@@ -87,5 +87,34 @@ class TestExtractCompanyNamesFromText(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+
+    # ── Phase 4 Step 2.4 で修正したケース ────────────────
+    # 数字+ピリオド始まりの断片（途中切れゴミ）を除外
+    def test_numeric_prefix_zenkaku_excluded(self):
+        text = "１．株式会社A、２．株式会社B"
+        result = extract_company_names_from_text(text)
+        self.assertIn("株式会社A", result)
+        self.assertIn("株式会社B", result)
+        for name in result:
+            self.assertFalse(name.startswith("１"), f"ゴミが残っている: {name}")
+            self.assertFalse(name.startswith("２"), f"ゴミが残っている: {name}")
+
+    def test_numeric_prefix_hankaku_excluded(self):
+        text = "1.株式会社A"
+        result = extract_company_names_from_text(text)
+        self.assertIn("株式会社A", result)
+        for name in result:
+            self.assertFalse(name.startswith("1"), f"ゴミが残っている: {name}")
+
+    def test_marusuji_prefix_excluded(self):
+        text = "①株式会社A、②株式会社B"
+        result = extract_company_names_from_text(text)
+        self.assertIn("株式会社A", result)
+        self.assertIn("株式会社B", result)
+        for name in result:
+            self.assertFalse(name.startswith("①"), f"ゴミが残っている: {name}")
+            self.assertFalse(name.startswith("②"), f"ゴミが残っている: {name}")
+
+
 if __name__ == "__main__":
     unittest.main()
