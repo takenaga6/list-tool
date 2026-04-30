@@ -16,3 +16,8 @@ debug_*.py
 # OS
 .DS_Store
 Thumbs.db
+main.py.bak
+*.bak
+main.py.bak.*
+main.py.bak
+*.bak.*

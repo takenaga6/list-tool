@@ -494,7 +494,7 @@ def process_one_company(
         if file_type:
             logger.info(f"ファイルURL検出（{file_type.upper()}）: {url}")
             from agents.list_page_agent import scrape_company_list_page
-            list_results = scrape_company_list_page(url, max_companies=50)
+            list_results = scrape_company_list_page(url, max_companies=2000)
             success_count = 0
             for r in list_results:
                 r_key = r["url"]
@@ -897,7 +897,7 @@ def main():
             search_results = search_google(keyword, period_tbs, MAX_RESULTS_PER_QUERY)
 
             # ヒット数を学習データとして記録
-            record_hit(keyword, len(search_results))
+            record_hit(keyword, len(search_results), source=f"search:{period_label}")
 
             if not search_results:
                 no_result_count += 1
@@ -1368,8 +1368,12 @@ def run_batch(
 
         # ─── ② キーワード検索 ─────────────────────────────────────
         if stats["success"] < target_count and query_list:
+            # Phase 3.1: 期間の組み合わせ爆発を防ぐため、periodsの最初の1個のみ使用
+            # （8期間 × 2803クエリ = 22424検索 → 2803検索に削減）
+            # 学習データが溜まったら Phase 3.3 で動的選択する
+            periods_to_use = periods[:1] if periods else periods
             search_tasks = [
-                (keyword, lbl, tbs) for keyword in query_list for lbl, tbs in periods
+                (keyword, lbl, tbs) for keyword in query_list for lbl, tbs in periods_to_use
             ]
             task_index      = 0
             no_result_count = 0
@@ -1378,7 +1382,7 @@ def run_batch(
                 task_index += 1
                 print(f"\n🔍 [{period_label_i}] 検索中 ({task_index}/{len(search_tasks)}): {keyword}")
                 search_results = search_google(keyword, period_tbs_i, MAX_RESULTS_PER_QUERY)
-                record_hit(keyword, len(search_results))
+                record_hit(keyword, len(search_results), source=f"search:{period_label_i}")
                 if not search_results:
                     no_result_count += 1
                     print("  ⚠️ 検索結果なし")
