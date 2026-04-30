@@ -1,6 +1,11 @@
 """
 キーワードエージェント
 検索クエリの組み合わせを自動生成し、ヒット数を学習して高精度な順に並び替える
+
+v2.0（Phase 3.3）:
+- record系関数に source パラメータ追加（媒体次元）
+- 後方互換マイグレーション（v1 → v2 自動変換）
+- 媒体別統計関数 get_media_stats() 追加
 """
 
 import json
@@ -163,6 +168,10 @@ NG_SKIP_THRESHOLD = 0.9   # NG率90%以上のクエリは末尾に回す
 MIN_RUNS_FOR_NG_CHECK = 3  # 最低3回実行後に判定
 A_RATE_THRESHOLD = 0.05   # A率5%未満かつ5回以上実行済み → 降格
 
+# ===== Phase 3.3 学習システム拡張 =====
+STATS_VERSION = "2.0"
+DEFAULT_SOURCE = "search"  # source未指定時のデフォルト
+
 
 def generate_all_queries() -> list[str]:
     """
@@ -236,78 +245,183 @@ def generate_all_queries() -> list[str]:
     return unique
 
 
+def _migrate_v1_to_v2(raw: dict) -> dict:
+    """v1形式（フラット）をv2形式（_version + queries）に変換する.
+
+    v1形式の例:
+      {"クエリA": {"total_hits": 10, "runs": 5, ...}}
+
+    v2形式の例:
+      {"_version": "2.0", "queries": {"クエリA": {..., "by_source": {}}}}
+    """
+    # 既にv2形式なら何もしない
+    if isinstance(raw, dict) and raw.get("_version") == STATS_VERSION:
+        return raw
+
+    # 空のdict → v2形式の空データを返す
+    if not raw:
+        return {"_version": STATS_VERSION, "queries": {}}
+
+    # v1形式を v2形式に変換
+    queries_v2 = {}
+    for key, value in raw.items():
+        if not isinstance(value, dict):
+            continue  # 不正データはスキップ
+        # v1のクエリデータをv2にコピー
+        queries_v2[key] = dict(value)
+        # by_source フィールドを追加（v1には存在しないので空）
+        if "by_source" not in queries_v2[key]:
+            queries_v2[key]["by_source"] = {}
+
+    return {"_version": STATS_VERSION, "queries": queries_v2}
+
+
 def load_stats() -> dict:
-    """過去のヒット統計を読み込む"""
+    """過去のヒット統計を読み込む（v1/v2両対応）.
+
+    Returns:
+        v2形式の dict: {"_version": "2.0", "queries": {...}}
+    """
     if os.path.exists(KEYWORD_STATS_FILE):
         try:
             with open(KEYWORD_STATS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
+                # マイグレーション（v1 → v2）
+                return _migrate_v1_to_v2(raw)
         except Exception:
             pass
-    return {}
+    # ファイルなし → v2形式の空データを返す
+    return {"_version": STATS_VERSION, "queries": {}}
 
 
 def save_stats(stats: dict):
-    """ヒット統計を保存する"""
+    """ヒット統計を保存する（v2形式）."""
     os.makedirs(os.path.dirname(KEYWORD_STATS_FILE), exist_ok=True)
+    # version保証
+    if "_version" not in stats:
+        stats["_version"] = STATS_VERSION
+    if "queries" not in stats:
+        stats["queries"] = {}
     with open(KEYWORD_STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
 
-def record_hit(query: str, hit_count: int):
-    """検索クエリのヒット数を記録する"""
-    stats = load_stats()
-
-    if query not in stats:
-        stats[query] = {
-            "total_hits": 0, "runs": 0, "avg_hits": 0.0,
-            "a_rank": 0, "b_rank": 0, "ng_count": 0,
-            "ab_rate": 0.0, "ng_rate": 0.0,
-            "last_run": ""
-        }
-
-    stats[query]["total_hits"] += hit_count
-    stats[query]["runs"] += 1
-    stats[query]["avg_hits"] = stats[query]["total_hits"] / stats[query]["runs"]
-    stats[query]["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-    save_stats(stats)
-
-
-def record_ng(query: str):
-    """クエリ経由でNGになった企業数を記録する"""
-    stats = load_stats()
-    if query not in stats:
-        return
-    stats[query]["ng_count"] = stats[query].get("ng_count", 0) + 1
-    runs = stats[query].get("runs", 1)
-    total_processed = stats[query].get("a_rank", 0) + stats[query].get("b_rank", 0) + stats[query]["ng_count"]
-    if total_processed > 0:
-        stats[query]["ng_rate"] = stats[query]["ng_count"] / total_processed
-    save_stats(stats)
-
-
-def record_rank_result(query: str, rank: str):
-    """クエリ経由で発見したランク結果を記録する（A/Bランク精度向上用）"""
-    stats = load_stats()
-    if query not in stats:
-        stats[query] = {
+def _get_query_data(stats: dict, query: str) -> dict:
+    """v2形式の stats から指定クエリのデータを取得（なければ初期化）."""
+    if "queries" not in stats:
+        stats["queries"] = {}
+    if query not in stats["queries"]:
+        stats["queries"][query] = {
             "total_hits": 0, "runs": 0, "avg_hits": 0.0,
             "a_rank": 0, "b_rank": 0, "ng_count": 0,
             "ab_rate": 0.0, "a_rate": 0.0, "ng_rate": 0.0,
-            "last_run": ""
+            "last_run": "",
+            "by_source": {},
         }
-    if rank == "A":
-        stats[query]["a_rank"] = stats[query].get("a_rank", 0) + 1
-    elif rank == "B":
-        stats[query]["b_rank"] = stats[query].get("b_rank", 0) + 1
+    # by_source が古いデータでない場合の保険
+    if "by_source" not in stats["queries"][query]:
+        stats["queries"][query]["by_source"] = {}
+    return stats["queries"][query]
 
-    total_ab = stats[query]["a_rank"] + stats[query].get("b_rank", 0)
-    total_processed = total_ab + stats[query].get("ng_count", 0)
-    total_hits = max(stats[query]["total_hits"], 1)
-    stats[query]["ab_rate"] = total_ab / total_hits
-    # A率 = Aランク件数 ÷ 処理済み件数（NG含む）
-    stats[query]["a_rate"] = stats[query]["a_rank"] / max(total_processed, 1)
+
+def _get_source_data(query_data: dict, source: str) -> dict:
+    """指定クエリの source 別データを取得（なければ初期化）."""
+    if source not in query_data["by_source"]:
+        query_data["by_source"][source] = {
+            "hits": 0, "runs": 0, "a_rank": 0, "b_rank": 0, "ng_count": 0,
+        }
+    return query_data["by_source"][source]
+
+
+def record_hit(query: str, hit_count: int, source: str = None):
+    """検索クエリのヒット数を記録する.
+
+    Args:
+        query: 検索クエリ
+        hit_count: ヒット件数
+        source: データソース（"search:1週間" / "list_page:kenko-keiei.jp" 等）
+                None の場合は DEFAULT_SOURCE("search") を使用
+    """
+    if source is None:
+        source = DEFAULT_SOURCE
+    stats = load_stats()
+    qd = _get_query_data(stats, query)
+
+    # クエリ全体の集計（既存と同じ）
+    qd["total_hits"] += hit_count
+    qd["runs"] += 1
+    qd["avg_hits"] = qd["total_hits"] / qd["runs"]
+    qd["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # source別の集計（新規）
+    sd = _get_source_data(qd, source)
+    sd["hits"] += hit_count
+    sd["runs"] += 1
+
+    save_stats(stats)
+
+
+def record_ng(query: str, source: str = None):
+    """クエリ経由でNGになった企業数を記録する.
+
+    Args:
+        query: 検索クエリ
+        source: データソース
+    """
+    if source is None:
+        source = DEFAULT_SOURCE
+    stats = load_stats()
+    if "queries" not in stats or query not in stats["queries"]:
+        return
+    qd = stats["queries"][query]
+
+    # クエリ全体（既存と同じ）
+    qd["ng_count"] = qd.get("ng_count", 0) + 1
+    total_processed = qd.get("a_rank", 0) + qd.get("b_rank", 0) + qd["ng_count"]
+    if total_processed > 0:
+        qd["ng_rate"] = qd["ng_count"] / total_processed
+
+    # source別（新規）
+    if "by_source" not in qd:
+        qd["by_source"] = {}
+    sd = _get_source_data(qd, source)
+    sd["ng_count"] += 1
+
+    save_stats(stats)
+
+
+def record_rank_result(query: str, rank: str, source: str = None):
+    """クエリ経由で発見したランク結果を記録する（A/Bランク精度向上用）.
+
+    Args:
+        query: 検索クエリ
+        rank: "A" / "B" / "C" / "NG"
+        source: データソース
+    """
+    if source is None:
+        source = DEFAULT_SOURCE
+    stats = load_stats()
+    qd = _get_query_data(stats, query)
+
+    # クエリ全体（既存と同じ）
+    if rank == "A":
+        qd["a_rank"] = qd.get("a_rank", 0) + 1
+    elif rank == "B":
+        qd["b_rank"] = qd.get("b_rank", 0) + 1
+
+    total_ab = qd["a_rank"] + qd.get("b_rank", 0)
+    total_processed = total_ab + qd.get("ng_count", 0)
+    total_hits = max(qd["total_hits"], 1)
+    qd["ab_rate"] = total_ab / total_hits
+    qd["a_rate"] = qd["a_rank"] / max(total_processed, 1)
+
+    # source別（新規）
+    sd = _get_source_data(qd, source)
+    if rank == "A":
+        sd["a_rank"] += 1
+    elif rank == "B":
+        sd["b_rank"] += 1
+
     save_stats(stats)
 
 
@@ -337,7 +451,8 @@ def get_sorted_queries(custom_queries: list[str] = None, worker_offset: int = 0)
                 all_queries.remove(q)
             all_queries.insert(0, q)
 
-    stats = load_stats()
+    stats_v2 = load_stats()
+    stats = stats_v2.get("queries", {})  # v2形式から queries 部分を取り出す
     custom_set = set(custom_queries or [])
 
     def sort_key(q):
@@ -393,8 +508,9 @@ def get_sorted_queries(custom_queries: list[str] = None, worker_offset: int = 0)
 
 
 def show_top_queries(n: int = 20):
-    """A/Bランク発見率の高いクエリTOPを表示する"""
-    stats = load_stats()
+    """A/Bランク発見率の高いクエリTOPを表示する."""
+    stats_v2 = load_stats()
+    stats = stats_v2.get("queries", {})
     if not stats:
         print("  まだ統計データがありません（初回実行後に蓄積されます）")
         return
@@ -417,10 +533,82 @@ def show_top_queries(n: int = 20):
             runs = data.get("runs", 0)
             print(f"  [{i:2d}] A:{a}件 B:{b}件 A率:{a_rate:.0%} ({runs}回) | {query}")
     else:
-        sorted_stats = sorted(stats.items(), key=lambda x: -x[1]["avg_hits"])
+        sorted_stats = sorted(stats.items(), key=lambda x: -x[1].get("avg_hits", 0))
         print(f"\n{'='*60}")
         print(f"  📊 高ヒットクエリ TOP{n}（ランク学習前）")
         print(f"{'='*60}")
         for i, (query, data) in enumerate(sorted_stats[:n], 1):
-            print(f"  [{i:2d}] 平均{data['avg_hits']:.1f}件 | {query}")
+            print(f"  [{i:2d}] 平均{data.get('avg_hits', 0):.1f}件 | {query}")
+    print()
+
+
+def get_media_stats() -> list[dict]:
+    """媒体（source）別の統計を集計して返す（Phase 3.3 新機能）.
+
+    全クエリの by_source データを集計し、各 source ごとに：
+      - 総ヒット数 / 総実行数 / 総NG数 / Aランク数 / Bランク数
+      - A率（Aランク数 / 処理済み件数）
+      - NG率
+    を計算する。
+
+    Returns:
+        list[dict]: 各 source の統計（A率降順）
+            例: [{"source": "list_page:kenko-keiei.jp", "total_hits": 100,
+                  "runs": 50, "a_rank": 5, "b_rank": 10, "ng_count": 20,
+                  "a_rate": 0.14, "ng_rate": 0.57}, ...]
+    """
+    stats_v2 = load_stats()
+    queries = stats_v2.get("queries", {})
+
+    # source別に集計
+    media_agg: dict[str, dict] = {}
+    for query, qd in queries.items():
+        by_source = qd.get("by_source", {})
+        for source, sd in by_source.items():
+            if source not in media_agg:
+                media_agg[source] = {
+                    "source": source,
+                    "total_hits": 0, "runs": 0,
+                    "a_rank": 0, "b_rank": 0, "ng_count": 0,
+                    "query_count": 0,  # この source を使ったクエリ数
+                }
+            ms = media_agg[source]
+            ms["total_hits"] += sd.get("hits", 0)
+            ms["runs"] += sd.get("runs", 0)
+            ms["a_rank"] += sd.get("a_rank", 0)
+            ms["b_rank"] += sd.get("b_rank", 0)
+            ms["ng_count"] += sd.get("ng_count", 0)
+            ms["query_count"] += 1
+
+    # A率・NG率を計算
+    result = []
+    for source, ms in media_agg.items():
+        total_processed = ms["a_rank"] + ms["b_rank"] + ms["ng_count"]
+        ms["a_rate"] = ms["a_rank"] / max(total_processed, 1)
+        ms["ng_rate"] = ms["ng_count"] / max(total_processed, 1)
+        result.append(ms)
+
+    # A率降順、同率ならAランク数降順
+    result.sort(key=lambda x: (-x["a_rate"], -x["a_rank"]))
+    return result
+
+
+def show_media_stats(n: int = 20):
+    """媒体別統計を表示する（Phase 3.3 新機能）."""
+    media_stats = get_media_stats()
+    if not media_stats:
+        print("  まだ媒体別統計データがありません（初回実行後に蓄積されます）")
+        return
+
+    print(f"\n{'='*70}")
+    print(f"  📡 媒体別 精度ランキング TOP{n}")
+    print(f"{'='*70}")
+    print(f"  {'順':>3} {'A率':>7} {'A':>4} {'B':>4} {'NG':>5} {'実行':>5} {'クエリ数':>6}  {'media'}")
+    print(f"  {'-'*3} {'-'*7} {'-'*4} {'-'*4} {'-'*5} {'-'*5} {'-'*6}  {'-'*30}")
+    for i, ms in enumerate(media_stats[:n], 1):
+        print(
+            f"  [{i:2d}] {ms['a_rate']:>6.1%} "
+            f"{ms['a_rank']:>4d} {ms['b_rank']:>4d} {ms['ng_count']:>5d} "
+            f"{ms['runs']:>5d} {ms['query_count']:>6d}  {ms['source']}"
+        )
     print()

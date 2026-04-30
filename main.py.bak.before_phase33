@@ -897,7 +897,7 @@ def main():
             search_results = search_google(keyword, period_tbs, MAX_RESULTS_PER_QUERY)
 
             # ヒット数を学習データとして記録
-            record_hit(keyword, len(search_results), source=f"search:{period_label}")
+            record_hit(keyword, len(search_results))
 
             if not search_results:
                 no_result_count += 1
@@ -1382,7 +1382,7 @@ def run_batch(
                 task_index += 1
                 print(f"\n🔍 [{period_label_i}] 検索中 ({task_index}/{len(search_tasks)}): {keyword}")
                 search_results = search_google(keyword, period_tbs_i, MAX_RESULTS_PER_QUERY)
-                record_hit(keyword, len(search_results), source=f"search:{period_label_i}")
+                record_hit(keyword, len(search_results))
                 if not search_results:
                     no_result_count += 1
                     print("  ⚠️ 検索結果なし")

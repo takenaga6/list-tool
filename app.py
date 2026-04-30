@@ -358,10 +358,131 @@ with tab_listup:
 
 
 # ──────────────────────────────
-# TAB: システム診断
+# TAB: システム診断（Phase 3.3 学習データ可視化）
 # ──────────────────────────────
 with tab_monitor:
     st.subheader("システム診断")
+    st.caption("検索クエリの学習データと媒体別の精度を表示します。")
+
+    # 学習データ読み込み（v2形式・後方互換あり）
+    try:
+        from agents.keyword_agent import load_stats, get_media_stats
+        stats_v2 = load_stats()
+        queries = stats_v2.get("queries", {})
+    except Exception as _e:
+        st.error(f"学習データ読み込みエラー: {_e}")
+        queries = {}
+
+    if not queries:
+        st.info("📊 まだ学習データがありません。リストアップを実行すると蓄積されます。")
+    else:
+        # ─────────────────────
+        # 全体統計（メトリクス）
+        # ─────────────────────
+        st.markdown("### 📊 全体統計")
+        _total_queries = len(queries)
+        _total_runs = sum(q.get("runs", 0) for q in queries.values())
+        _total_a = sum(q.get("a_rank", 0) for q in queries.values())
+        _total_b = sum(q.get("b_rank", 0) for q in queries.values())
+        _total_ng = sum(q.get("ng_count", 0) for q in queries.values())
+
+        _col1, _col2, _col3, _col4 = st.columns(4)
+        with _col1:
+            st.metric("学習済みクエリ数", f"{_total_queries:,}")
+        with _col2:
+            st.metric("A判定累計", f"{_total_a:,}")
+        with _col3:
+            st.metric("B判定累計", f"{_total_b:,}")
+        with _col4:
+            st.metric("総検索回数", f"{_total_runs:,}")
+
+        st.markdown(f"NG累計: **{_total_ng:,}件**")
+
+        # ─────────────────────
+        # 媒体別精度ランキング
+        # ─────────────────────
+        st.markdown("### 📡 媒体別 精度ランキング")
+        st.caption("source ごとの精度を比較。「どの媒体・期間が効いているか」がわかる。")
+        try:
+            _media_stats = get_media_stats()
+        except Exception as _e:
+            _media_stats = []
+            st.warning(f"媒体別統計取得エラー: {_e}")
+
+        if not _media_stats:
+            st.info("媒体別データはまだありません。")
+        else:
+            _media_rows = []
+            for _ms in _media_stats:
+                _media_rows.append({
+                    "source": _ms["source"],
+                    "A率": f"{_ms['a_rate']:.1%}",
+                    "Aランク": _ms["a_rank"],
+                    "Bランク": _ms["b_rank"],
+                    "NG": _ms["ng_count"],
+                    "総ヒット": _ms["total_hits"],
+                    "実行回数": _ms["runs"],
+                    "クエリ数": _ms["query_count"],
+                })
+            _media_df = pd.DataFrame(_media_rows)
+            st.dataframe(_media_df, hide_index=True, use_container_width=True)
+
+        # ─────────────────────
+        # 高精度クエリ TOP20
+        # ─────────────────────
+        st.markdown("### 🏆 高精度クエリ TOP20")
+        st.caption("A率が高い順に表示。これらのクエリが学習で優先実行される。")
+
+        # A率 → Aランク数の順でソート
+        _sorted_queries = sorted(
+            queries.items(),
+            key=lambda x: (-x[1].get("a_rate", 0), -x[1].get("a_rank", 0))
+        )
+        _top_rows = []
+        for _q, _data in _sorted_queries[:20]:
+            _top_rows.append({
+                "クエリ": _q[:50] + ("..." if len(_q) > 50 else ""),
+                "A率": f"{_data.get('a_rate', 0):.1%}",
+                "Aランク": _data.get("a_rank", 0),
+                "Bランク": _data.get("b_rank", 0),
+                "NG": _data.get("ng_count", 0),
+                "実行回数": _data.get("runs", 0),
+                "平均ヒット": f"{_data.get('avg_hits', 0):.1f}",
+            })
+        if _top_rows:
+            _top_df = pd.DataFrame(_top_rows)
+            st.dataframe(_top_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("ランクデータがまだありません。")
+
+        # ─────────────────────
+        # 低品質クエリ（NG率高い）
+        # ─────────────────────
+        st.markdown("### ⚠️ 低品質クエリ（NG率高い）")
+        st.caption("改善対象。学習で末尾に降格されているクエリ。")
+
+        # NG率高い順、ただし実行回数3回以上に絞る（ノイズ除去）
+        _ng_queries = [
+            (q, d) for q, d in queries.items()
+            if d.get("runs", 0) >= 3 and d.get("ng_rate", 0) >= 0.5
+        ]
+        _ng_queries.sort(key=lambda x: -x[1].get("ng_rate", 0))
+
+        _ng_rows = []
+        for _q, _data in _ng_queries[:20]:
+            _ng_rows.append({
+                "クエリ": _q[:50] + ("..." if len(_q) > 50 else ""),
+                "NG率": f"{_data.get('ng_rate', 0):.1%}",
+                "NG": _data.get("ng_count", 0),
+                "Aランク": _data.get("a_rank", 0),
+                "Bランク": _data.get("b_rank", 0),
+                "実行回数": _data.get("runs", 0),
+            })
+        if _ng_rows:
+            _ng_df = pd.DataFrame(_ng_rows)
+            st.dataframe(_ng_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("低品質クエリはまだありません（または実行回数が少ない）。")
 
 
 # ──────────────────────────────
