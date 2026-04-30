@@ -494,7 +494,7 @@ def process_one_company(
         if file_type:
             logger.info(f"ファイルURL検出（{file_type.upper()}）: {url}")
             from agents.list_page_agent import scrape_company_list_page
-            list_results = scrape_company_list_page(url, max_companies=2000)
+            list_results = scrape_company_list_page(url, max_companies=50)
             success_count = 0
             for r in list_results:
                 r_key = r["url"]
@@ -1368,12 +1368,8 @@ def run_batch(
 
         # ─── ② キーワード検索 ─────────────────────────────────────
         if stats["success"] < target_count and query_list:
-            # Phase 3.1: 期間の組み合わせ爆発を防ぐため、periodsの最初の1個のみ使用
-            # （8期間 × 2803クエリ = 22424検索 → 2803検索に削減）
-            # 学習データが溜まったら Phase 3.3 で動的選択する
-            periods_to_use = periods[:1] if periods else periods
             search_tasks = [
-                (keyword, lbl, tbs) for keyword in query_list for lbl, tbs in periods_to_use
+                (keyword, lbl, tbs) for keyword in query_list for lbl, tbs in periods
             ]
             task_index      = 0
             no_result_count = 0
