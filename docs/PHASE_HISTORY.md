@@ -1,0 +1,540 @@
+# PHASE_HISTORY.md - list-tool 実装履歴
+
+> Phase 1 〜 Phase 4 の実装履歴を時系列で記録。
+> 各 Phase の目的・実装内容・コミット・効果・既知の課題を網羅。
+
+---
+
+## Phase 1: 基盤実装（〜2026-03）
+
+### 目的
+
+```
+- リストアップツールの基盤構築
+- 6つの加点シグナル（S1〜S6）でランクA/B/C/NG判定
+- HubSpot連携・自動登録
+```
+
+### 実装内容
+
+```
+- agents/ 6エージェント
+   - rank_agent.py: A/B/C/NG判定
+   - keyword_agent.py: 検索クエリ生成
+   - search_agent.py: Web検索（Google CSE→DDGS）
+   - scraper_agent.py: 企業HP情報抽出
+   - hubspot_agent.py: HubSpot登録
+   - list_page_agent.py: リストページから企業抽出
+- main.py: メインフロー制御
+- app.py: Streamlit UI
+- config.py: 設定値・キーワードリスト
+- docs/: 仕様ドキュメント群
+```
+
+### S1〜S6 シグナル定義
+
+```
+S1: PR有料媒体掲載（KENJA GLOBAL等）
+S2: 健康経営メディア掲載（アクサ生命等）
+S3: 法定外福利厚生記載
+S4: 健康経営注力
+S5: 半年以内のHPリニューアル
+S6: 自社ビル保有
+
+ランク基準:
+- S1/S2あり時点でB確定
+- S1/S2 + S3〜S6が2つ以上 → A
+- S1/S2なしの場合、S3〜S6合計3つ以上 → B
+```
+
+---
+
+## Phase 2: 3層構造リスト条件実装（2026-04-29）
+
+### 目的
+
+```
+- 49社契約企業データ分析に基づくランク判定の精度向上
+- Phase 1必須条件を導入して「明らかに対象外」を早期除外
+```
+
+### データ分析（49社契約企業分析シート）
+
+```
+シート: 2026年営業分析シート__3_.xlsx
+タブ: 契約企業分析（111列・58行）
+
+朝の分析（後に誤りが判明）:
+- 全契約企業（49社）が健康経営認定保有 → 100% ← 誤読
+
+正確な集計（夜の再分析で判明）:
+- 優良継続中（14社）: 健康経営認定あり 35% / なし 64%
+- 解約済み（24社）: 健康経営認定あり 83% / なし 16%
+- スポット（8社）: 認定あり 87%
+- 初回契約中（24社）: 認定あり 79%
+
+継続率を分けるシグナル（正しい分析結果）:
+- ISO認定（CH列）: 継続社42% / 解約社12%（3.5倍差）★
+- SDGs/サステナ（CI列）: 継続社42% / 解約社20%（2倍差）★
+- 社長メッセージ健康記載（V列）: 継続社100% / 解約社50%
+- 社長メッセージ健康記載_詳細区分（W列）: 継続社35% / 解約社8%（4.3倍差）★最強
+- くるみん認定（CE列）: ほぼ0%（シグナルにならない）
+- えるぼし認定（CF列）: ほぼ0%（同上）
+```
+
+### 実装内容
+
+```
+1. rank_agent.py に check_phase1_must_conditions() 追加（199行〜）
+   1つでも違反でNG確定:
+   ① 業種NG: NG_INDUSTRY_KEYWORDS_PHASE1（9個・広告/メディア系）
+   ② レッドオーシャン業種: INDUSTRY_PROFIT_MEDIUM_KEYWORDS（6個・SI/総合商社）
+      - 例外: 大手プライム子会社（is_parent_prime_subsidiary）
+   ③ HP健康経営記載必須: HEALTH_KEIEI_REQUIRED_KEYWORDS（12個）
+   ④ HP採用情報必須: RECRUIT_PAGE_REQUIRED_KEYWORDS（10個）
+   ⑤ 福利厚生記載必須: WELFARE_KEYWORDS（26個）
+      - 例外: 士業/投資運用（FUKURI_LEGAL_ONLY_OK_INDUSTRY 17個）
+   ⑥ 従業員数フィルター（細分化）
+
+2. evaluate_rank_v2 新規追加（804行〜）
+   ステップ1: existing_evaluate_rank で必須NGチェック
+   ステップ2: 加点 - 減点で総合スコア
+   ステップ3: ランク決定
+      - 5点以上 → A
+      - 2-4点 → B
+      - 0-1点 → C
+      - それ以下 → NG
+
+3. config.py に新規キーワードリスト追加
+   - NG_INDUSTRY_KEYWORDS_PHASE1
+   - INDUSTRY_PROFIT_MEDIUM_KEYWORDS
+   - HEALTH_KEIEI_REQUIRED_KEYWORDS
+   - RECRUIT_PAGE_REQUIRED_KEYWORDS
+   - FUKURI_LEGAL_ONLY_OK_INDUSTRY
+   - PARENT_PRIME_KEYWORDS
+   - EMPLOYEE_RANGE_CONFIG
+
+4. テスト追加（47件・全テスト81件PASS）
+```
+
+### コミット
+
+```
+PR #3 #4 マージ
+- config.py: 929行
+- rank_agent.py: 865行
+```
+
+### 既知の課題（後に判明）
+
+```
+朝の49社データ分析で「全契約企業が健康経営認定」と誤読していた。
+これに基づいて Phase 1必須条件「健康経営記載」を必須にしたが、
+実際は継続社の64%が健康経営認定なし。
+→ Phase 1必須条件が厳しすぎる可能性
+→ Phase 4 で発覚・設計再構築の必要性確認
+```
+
+---
+
+## Phase 3: リストアップ機能改善（2026-04-30）
+
+### Phase 3.1: 応急処置（午前）
+
+#### 目的
+
+```
+リストアップが「動かない」状態を解消（22,424検索→所要時間187時間）
+```
+
+#### 実装内容
+
+```
+main.py 修正:
+- 497行: list_page max_companies 50 → 2000
+- 1372行: periods 8期間 → 1期間
+
+効果:
+- 検索回数 22,424 → 2,803（87%削減）
+- 所要時間 187時間 → 23時間
+```
+
+### Phase 3.3: 学習システム v2.0（午後）
+
+#### 目的
+
+```
+学習システムの3次元化（クエリ × 期間 × 媒体）
+媒体別の精度を追跡可能にする
+```
+
+#### 実装内容
+
+```
+1. agents/keyword_agent.py 拡張（614行）
+   - データ構造 v1（フラット）→ v2（_version + queries + by_source）
+   - record_hit / record_ng / record_rank_result に source パラメータ追加
+   - v1→v2 自動マイグレーション機能
+   - get_media_stats() / show_media_stats() 新規追加
+
+2. main.py 修正
+   - record_hit に source=f"search:{period_label}" 追加（2箇所）
+   - 期間別の検索精度が学習データに記録される
+
+3. app.py（システム診断タブ拡張・442→563行）
+   - 全体統計（4列メトリクス）
+   - 媒体別精度ランキング表
+   - 高精度クエリ TOP20
+   - 低品質クエリ表
+```
+
+#### データ構造
+
+```json
+{
+  "_version": 2,
+  "queries": {
+    "クエリ文字列": {
+      "hits": int,
+      "ng": int,
+      "rank_a": int,
+      "rank_b": int,
+      "rank_c": int,
+      "rank_ng": int
+    }
+  },
+  "by_source": {
+    "search:1ヶ月以内": { "hits": ..., "ng": ..., ... },
+    "search:6ヶ月以内": { ... },
+    "list_page:kenko-keiei.jp": { ... }
+  }
+}
+```
+
+### コミット
+
+```
+PR #5 マージ
+- 4bc14be Phase 3.1: 応急処置
+- 87a5fd8 main.py.bak 削除
+- 8d9884d Phase 3.3: 学習システムv2.0
+- b540bdc main.py.bak.before_phase33 削除
+- マージコミット: 0399ba6
+```
+
+### 効果
+
+```
+- 短期: リストアップが「動く・成果が出る状態」になる（はず）
+- 中期: システム診断タブで学習データが可視化される
+- 長期: 「期間×媒体×ワード」の組み合わせ精度が学習されて自動最適化
+```
+
+### 本番動作確認の問題発覚（夕方）
+
+```
+ユーザーが本番でリストアップ実行（17分・登録0件で停止）
+
+ログから見えた事象:
+- list_page_agent: kenko-keiei.jp から 21,375社抽出
+- でも処理した5社全部が「Phase1必須条件NG: HP健康経営記載なし」で弾かれた
+
+真因（4つ・Phase 4で分析）:
+A. list_page_agent の HTML 抽出バグ
+   → 「こそが働きがいを育てる（三和建設株式会社」のような壊れた企業名
+B. scraper_agent はトップページのみ取得
+   → 採用ページ・CSRページの「健康経営」記載を見逃す
+C. 検索クエリで無関係URL返却
+   → 「株式会社浜の家」検索で hoken-mammoth.com（無関係）
+D. Phase 1必須条件「健康経営記載」が厳しすぎる可能性
+   → 49社データ再分析で判明（後述）
+```
+
+---
+
+## Phase 4: 真因対応（2026-04-30 夜）
+
+### 当初計画
+
+```
+Step 1: HEALTH_KEIEI_REQUIRED_KEYWORDS 拡充
+Step 2: list_page_agent 企業名抽出バグ修正
+Step 3: deep_scraper_agent 新規実装
+Step 4: rank_agent 修正
+Step 5: テスト
+Step 6: push + マージ + Render反映
+
+合計: 4時間予定
+```
+
+### Phase 4 Step 1: キーワード拡充（実装済）
+
+#### 実装内容
+
+```
+config.py 修正:
+- HEALTH_KEIEI_REQUIRED_KEYWORDS: 12個 → 35個
+   既存12個（抽象語彙）
+   + 認証系（経産省）5個: 健康経営優良法人2024/2025/2026、ネクストブライト1000、健康経営銘柄
+   + 認証系（厚労省）5個: ユースエール、プラチナくるみん、えるぼし、プラチナえるぼし、安全衛生優良企業マーク
+   + 健康施策13個: 脳ドック、がん検診、人間ドック、メンタルヘルスケア、メンタルヘルス、
+     健康保険組合、保健指導、健康増進、健康配慮、従業員健康、社員健康、健康支援、健康サポート
+   - くるみん（通常）は 49社データで効果なし（0%）のため除外
+
+- DEEP_SCRAPE_HEALTH_KEYWORDS: 19個 新規追加（Step 3用・将来活用）
+   - 健康関連3個 + 法定外福利厚生施策16個
+```
+
+#### テスト修正
+
+```
+test_no_kenkokeiei_ng の page_text から「人間ドック」削除
+（新キーワードに該当するため、テストデータが意図せず通ってしまう）
+```
+
+#### コミット
+
+```
+814d27f Phase 4 Step 1: HEALTH_KEIEI_REQUIRED_KEYWORDS 拡充 + DEEP_SCRAPE 新規追加
+2 files changed, 85 insertions(+), 2 deletions(-)
+```
+
+### Phase 4 Step 2: 企業名抽出バグ修正（実装済）
+
+#### 問題
+
+```
+朝のログで HTML 抽出経由で壊れた企業名:
+- "こそが働きがいを育てる（三和建設株式会社"
+- "の再構築から始める未来を育む共創の船（株式会社"
+- "経営の極意とは(ダイサンドット株式会社"
+
+原因: COMPANY_NAME_PATTERNS の除外文字に「（」「(」「）」「)」が含まれていなかった
+```
+
+#### 修正内容
+
+```
+agents/list_page_agent.py 35行目:
+
+変更前:
+COMPANY_NAME_PATTERNS = [
+    r"((?:株式会社|合同会社|有限会社|一般社団法人|NPO法人)[^\s「」【】\n\r<、。,]{1,30})",
+    r"([^\s「」【】\n\r<、。,]{1,30}(?:株式会社|合同会社|有限会社))",
+]
+
+変更後（除外文字に括弧追加）:
+COMPANY_NAME_PATTERNS = [
+    r"((?:株式会社|合同会社|有限会社|一般社団法人|NPO法人)[^\s「」【】（）()\n\r<、。,]{1,30})",
+    r"([^\s「」【】（）()\n\r<、。,]{1,30}(?:株式会社|合同会社|有限会社))",
+]
+```
+
+#### テスト追加
+
+```
+tests/test_list_page_agent.py 新規作成（10件）:
+- test_simple_kabushiki_kaisha
+- test_simple_yugen_kaisha
+- test_simple_godou_kaisha
+- test_simple_shadanhojin
+- test_paren_zenkaku_breakdown ★
+- test_paren_hankaku_breakdown ★
+- test_paren_close_zenkaku ★
+- test_too_short_excluded
+- test_too_long_excluded
+- test_no_target_returns_empty
+```
+
+#### コミット
+
+```
+485ef37 Phase 4 Step 2: list_page_agent 企業名抽出バグ修正
+2 files changed, 93 insertions(+), 2 deletions(-)
+```
+
+### Phase 4 Step 2.4: ゴミ混入除外（実装済）
+
+#### 問題
+
+```
+入力: "１．株式会社A、２．株式会社B"
+抽出: ['株式会社A', '株式会社B', '１．株式会社', '２．株式会社']
+                              ↑後者2つがゴミ
+
+原因: パターン2の貪欲マッチで「数字+ピリオド+株式会社」も抽出される
+```
+
+#### 修正内容
+
+```
+agents/list_page_agent.py に追加:
+
+NUMERIC_PREFIX_PATTERN = re.compile(r'^[\d０-９①-⑳][.．、)）]?')
+
+extract_company_names_from_text() 内で:
+- NUMERIC_PREFIX_PATTERN.match(name) なら除外
+- 企業名表記のみ（"株式会社" 単独等）も除外
+```
+
+#### テスト追加（3件）
+
+```
+- test_numeric_prefix_zenkaku_excluded（全角数字）
+- test_numeric_prefix_hankaku_excluded（半角数字）
+- test_marusuji_prefix_excluded（丸囲み数字）
+
+全テスト 91 → 94件 PASS
+```
+
+#### コミット
+
+```
+9878ba4 Phase 4 Step 2.4: 企業名抽出のゴミ混入を除外（数字+ピリオド始まり）
+2 files changed, 43 insertions(+)
+```
+
+### Phase 4 Step 3: deep_scraper_agent（中止）
+
+#### 当初計画
+
+```
+新規エージェント agents/deep_scraper_agent.py（約200行）
+
+役割:
+- Phase 1必須条件「HP健康経営記載なし」で弾かれた企業を救済
+- 採用ページ・CSRページ・福利厚生ページ・経営理念ページ（4ページ）を深掘り取得
+- 「ページコンテキスト × 広めワード」で精度確保
+   - 採用ページ × 「健康」 = 従業員の健康文脈
+   - CSRページ × 「健康」 = 健康経営文脈
+   - 福利厚生ページ × 「人間ドック」「マッサージ」 = 施策文脈
+
+主要関数:
+- find_target_links(soup, base_url) → dict
+- fetch_deep_pages(url, top_soup) → dict[str, str]
+- has_health_signal_in_page(page_type, page_text) → tuple[bool, str]
+
+呼び出し条件（議論の結果）:
+- C案（最終）: Phase 1必須条件NG救済 + Phase 1通過後の加点正確化
+- ①②⑥でNGじゃない企業全部に呼ぶ
+```
+
+#### 中止判断の経緯
+
+```
+1. ユーザー指摘「必須条件が厳しすぎる？リスト作成されない気がする」
+2. ユーザー指摘「契約がゴールでよい。継続には複合的な要因が重なる」
+3. ユーザー指摘「FBモーゲージ、グランドバリュー、桜川サービスのように
+              中小でも健康経営関係なく継続している企業がある」
+4. 49社データ再分析で衝撃の事実判明:
+   - 健康経営認定なしの継続率: 69%
+   - 健康経営認定ありの継続率: 20%
+   - 朝の私の分析「全契約企業100%が健康経営認定」は完全な誤り
+5. ツール設計の根本問題と判断
+   - deep_scraper は「症状治療」
+   - 設計の根本見直しが「原因治療」
+6. Step 3 中止 → 設計再構築は明日朝以降に持ち越し
+```
+
+#### 残作業
+
+```
+- DEEP_SCRAPE_HEALTH_KEYWORDS 19個（Step 1で追加済）は将来活用
+- deep_scraper の実装は明日朝以降の設計次第
+```
+
+### Phase 4 全体のコミット履歴
+
+```
+- 814d27f Phase 4 Step 1: HEALTH_KEIEI_REQUIRED_KEYWORDS 拡充
+- 485ef37 Phase 4 Step 2: list_page_agent 企業名抽出バグ修正
+- 9878ba4 Phase 4 Step 2.4: 企業名抽出のゴミ混入を除外
+
+ブランチ: feature/phase4-deep-scraper
+push 状態: 未実施 ← 重要
+main へのマージ: 未実施
+Render反映: 未実施
+
+→ 明日朝、ドキュメント整備後に push + マージ + Render反映
+```
+
+---
+
+## 設計再構築（明日朝以降）
+
+### 3つの選択肢
+
+#### 設計1（現状）: 継続率の高い企業を絞り込む
+
+```
+- Phase 1必須条件を厳しく設定（健康経営+採用+福利厚生）
+- Phase 2加点減点でランク
+- 業種NG・規模フィルタ・健康経営記載・採用・福利厚生 全部チェック
+
+問題点:
+- 49社データで「健康経営認定」が継続率の予測子として弱い
+- むしろ逆相関の可能性
+- ロジック複雑
+```
+
+#### 設計2（ユーザー提案）: シンプル化
+
+```
+- list_page_agent で健康経営認証リストから企業取得
+- 規模フィルタ（10-199名）
+- HubSpot重複チェック
+- 終わり
+
+メリット:
+- 母集団を「健康経営認証企業」に絞る
+- 開発コスト大幅減
+- 「契約獲得率の高い母集団」に対して効率アプローチ
+- 朝の問題（全弾き）が消える
+
+デメリット:
+- 健康経営認証以外の優良候補を取りこぼす
+- 質より量の場合に弱い
+```
+
+#### 設計3（折衷）
+
+```
+- Phase 1必須条件を緩和:
+   ③ HP健康経営記載 → 加点に降格
+   ④ HP採用情報 → 加点に降格
+   ⑤ 福利厚生記載 → 加点に降格
+- 業種NG・規模フィルタ → 維持
+- 加点シグナルに ISO・SDGs・社長メッセージ詳細を追加
+   （49社データで継続率に効果ありと判明）
+
+メリット:
+- 既存資産（Phase 1+2 ロジック）活用
+- 緩和で網が広がる
+- 加点シグナルで品質維持
+
+デメリット:
+- ロジックは複雑なまま
+```
+
+### 判断材料
+
+```
+- 49社契約企業分析シート（要再分析）
+- 営業視点（契約獲得 vs 継続率）
+- 開発コスト
+- 朝の判断軸（影響総量 × リソース × 市場 × ワクワク）
+```
+
+---
+
+## このファイルの更新ルール
+
+```
+更新タイミング:
+- Phase が進んだ時（Phase 5, 6, ...）
+- Phase の中で Step 完了時
+- 設計再構築の判断完了時
+
+最新エントリは Phase 番号順に追加。
+古いエントリは保持。
+```

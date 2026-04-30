@@ -1,3 +1,14 @@
+> ⚠️ **このファイルは Phase 1〜2 時点の仕様**（2026-04-30 確認）
+> Phase 3+4 の最新情報は以下を参照:
+> - docs/CLAUDE_LIST_TOOL.md（Claude指示書）
+> - docs/PHASE_HISTORY.md（Phase 1〜4 実装履歴）
+> - docs/DECISION_LOG.md（意思決定ログ）
+> - docs/rank_criteria.md（最新Phase 1必須条件）
+> - docs/agents/list_page_agent.md（Step 2修正反映済）
+> - docs/agents/keyword_agent.md（Phase 3.3 v2.0反映済）
+
+---
+
 # Agent: HubSpotエージェント（hubspot_agent.py）
 
 **目的**
