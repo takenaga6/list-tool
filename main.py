@@ -35,7 +35,7 @@ from config import (
 )
 from agents.search_agent import extract_domain, search_google
 from agents.scraper_agent import scrape_company_info, find_media_article_url
-from agents.rank_agent import evaluate_rank, pre_screen
+from agents.rank_agent import evaluate_rank, evaluate_rank_v2, pre_screen
 from agents.hubspot_agent import HubSpotAgent
 from agents.keyword_agent import get_sorted_queries, record_hit, record_ng, record_rank_result, show_top_queries
 from agents.list_page_agent import scrape_company_list_page, scrape_s1_media, scrape_s2_media
@@ -553,7 +553,7 @@ def process_one_company(
 
         # ランク判定（Phase 1必須条件はHP本文を必要とするため page_text を渡す）
         page_text = company_info.get("_page_text", "")
-        rank_result = evaluate_rank(company_info, [search_result], page_text=page_text)
+        rank_result = evaluate_rank_v2(company_info, [search_result], page_text=page_text)
         company_info["rank"] = rank_result["rank"]    # HubSpot a_12 書き込み用
         company_info["signals"] = rank_result.get("signals", {})  # HubSpot S3〜S6 書き込み用
 
