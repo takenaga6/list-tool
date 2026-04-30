@@ -467,3 +467,399 @@ def _check_s6(text: str) -> tuple[bool, str]:
         if kw in text:
             return True, f"自社ビル: {kw}"
     return False, ""
+
+
+# ═══════════════════════════════════════════════════════════
+# Phase 2: 必須条件 + 加点 + 減点 の3層構造（2026-04-30〜）
+# 49社の契約企業分析データから導出
+# Phase2_実装計画.md / config.py の各マッピング辞書を参照
+# ═══════════════════════════════════════════════════════════
+
+import sys as _sys
+import os as _os
+_DIR = _os.path.dirname(_os.path.abspath(__file__))
+_sys.path.insert(0, _os.path.join(_DIR, ".."))
+
+from config import (
+    INDUSTRY_PROFIT_MAPPING,
+    INDUSTRY_TURNOVER_MAPPING,
+    INDUSTRY_CATEGORY_KEYWORDS,
+    PRIME_LOCATION_KEYWORDS,
+    LOCAL_LOCATION_KEYWORDS,
+    RECRUIT_MEDIA_KEYWORDS,
+    FOUNDER_OWNER_KEYWORDS,
+)
+
+
+# ── マッピング判定関数 ─────────────────────────────────────
+
+
+def classify_industry_profit(industry: str) -> str:
+    """業界利益率ランクを判定する.
+
+    Args:
+        industry: 業種名（scraperから取得した文字列）
+
+    Returns:
+        "high" / "medium-high" / "medium" / "low" / "unknown"
+    """
+    if not industry:
+        return "unknown"
+    text = industry.lower()
+    industry_lower = industry  # 日本語比較用
+    for rank, keywords in INDUSTRY_PROFIT_MAPPING.items():
+        for kw in keywords:
+            if kw.lower() in text or kw in industry_lower:
+                return rank
+    return "unknown"
+
+
+def classify_industry_turnover(industry: str) -> str:
+    """業界離職率ランクを判定する.
+
+    Args:
+        industry: 業種名
+
+    Returns:
+        "low" / "medium" / "unknown"
+    """
+    if not industry:
+        return "unknown"
+    text = industry.lower()
+    industry_lower = industry
+    for rank, keywords in INDUSTRY_TURNOVER_MAPPING.items():
+        for kw in keywords:
+            if kw.lower() in text or kw in industry_lower:
+                return rank
+    return "unknown"
+
+
+def classify_industry_category(industry: str) -> str | None:
+    """業種カテゴリを判定する（最初にマッチしたカテゴリを返す）.
+
+    Args:
+        industry: 業種名
+
+    Returns:
+        "商社/卸売" / "金融" / "製造業" 等のカテゴリ名 / None
+    """
+    if not industry:
+        return None
+    for category, keywords in INDUSTRY_CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in industry:
+                return category
+    return None
+
+
+def classify_location(address: str) -> str:
+    """住所から立地グレードを判定する.
+
+    Args:
+        address: 住所（例：東京都千代田区丸の内1-1-1）
+
+    Returns:
+        "prime" (都心一等地) / "local" (地方) / "neither" (どちらでもない) / "unknown" (空)
+    """
+    if not address:
+        return "unknown"
+    # まず都心一等地チェック
+    for kw in PRIME_LOCATION_KEYWORDS:
+        if kw in address:
+            return "prime"
+    # 次に地方チェック
+    for kw in LOCAL_LOCATION_KEYWORDS:
+        if kw in address:
+            return "local"
+    return "neither"
+
+
+def count_recruit_media(page_text: str) -> int:
+    """HP本文から採用媒体の数を数える.
+
+    Args:
+        page_text: HP本文テキスト
+
+    Returns:
+        媒体数（0以上の整数）
+    """
+    if not page_text:
+        return 0
+    text_lower = page_text.lower()
+    found_media = set()
+    for kw in RECRUIT_MEDIA_KEYWORDS:
+        if kw.lower() in text_lower:
+            # 大文字小文字違いの重複を排除（例：doda と DODA は同じ）
+            normalized = kw.lower()
+            # rikunabi/リクナビ等の同義語をまとめる
+            if "リクナビ" in kw or "rikunabi" in normalized:
+                found_media.add("rikunabi")
+            elif "マイナビ" in kw or "mynavi" in normalized:
+                found_media.add("mynavi")
+            elif "doda" == normalized or "doda" in normalized:
+                found_media.add("doda")
+            elif "engage" in normalized or "エンゲージ" in kw:
+                found_media.add("engage")
+            elif "indeed" in normalized:
+                found_media.add("indeed")
+            elif "bizreach" in normalized or "ビズリーチ" in kw:
+                found_media.add("bizreach")
+            elif "wantedly" in normalized or "ウォンテッドリー" in kw:
+                found_media.add("wantedly")
+            elif "type" in normalized or "タイプ" in kw:
+                found_media.add("type")
+            elif "リクルートエージェント" in kw:
+                found_media.add("recruit_agent")
+            elif "jac" in normalized:
+                found_media.add("jac")
+            elif "openwork" in normalized:
+                found_media.add("openwork")
+            elif "en転職" in kw or "エン転職" in kw:
+                found_media.add("en_tenshoku")
+            else:
+                found_media.add(normalized)
+    return len(found_media)
+
+
+def is_founder_owner(page_text: str) -> bool:
+    """創業家オーナー判定（HP本文から）.
+
+    Args:
+        page_text: HP本文テキスト
+
+    Returns:
+        True: 創業家オーナーの可能性あり / False: なし
+    """
+    if not page_text:
+        return False
+    for kw in FOUNDER_OWNER_KEYWORDS:
+        if kw in page_text:
+            return True
+    return False
+
+
+def is_parent_prime_subsidiary_v2(page_text: str) -> bool:
+    """大手プライム子会社判定（v2）.
+
+    既存の is_parent_prime_subsidiary() と同じ動作。
+    Phase 2のテスト用に別名で公開。
+
+    Args:
+        page_text: HP本文テキスト
+
+    Returns:
+        True: 大手プライム子会社 / False: そうでない
+    """
+    return is_parent_prime_subsidiary(page_text)
+
+
+# ── 加点・減点ロジック ───────────────────────────────────
+
+
+def evaluate_useful_conditions(
+    company_info: dict, page_text: str = ""
+) -> tuple[int, list[str]]:
+    """加点条件を評価する（49社分析からの加点条件）.
+
+    Args:
+        company_info: scraperで取得した企業情報
+        page_text: HP本文
+
+    Returns:
+        (score, reasons): 加点合計と理由リスト
+    """
+    score = 0
+    reasons: list[str] = []
+
+    industry = company_info.get("industry", "") or ""
+    address = company_info.get("address", "") or ""
+    company_name = company_info.get("company_name", "") or ""
+
+    # ===== +2点：強いシグナル =====
+
+    # 業種カテゴリ判定（+2点）
+    category = classify_industry_category(industry)
+    if category in ("商社/卸売", "金融", "教育ソフト"):
+        score += 2
+        reasons.append(f"+2 業種:{category}")
+    elif category in ("人材派遣", "投資運用", "士業"):
+        # +1点に該当
+        score += 1
+        reasons.append(f"+1 業種:{category}")
+
+    # 業界平均利益率（+2 / +1 / -2）
+    profit = classify_industry_profit(industry)
+    if profit == "high":
+        score += 2
+        reasons.append("+2 業界利益率「高」")
+    elif profit == "medium-high":
+        score += 1
+        reasons.append("+1 業界利益率「中-高/低-中」")
+
+    # 大手プライム子会社（+2点）
+    if page_text and is_parent_prime_subsidiary(page_text):
+        score += 2
+        reasons.append("+2 大手プライム子会社")
+
+    # 採用媒体カウント（+2 / +1）
+    if page_text:
+        media_count = count_recruit_media(page_text)
+        if media_count >= 3:
+            score += 2
+            reasons.append(f"+2 採用媒体3つ以上({media_count}媒体)")
+        elif media_count >= 1:
+            score += 1
+            reasons.append(f"+1 採用媒体1-2つ({media_count}媒体)")
+
+    # ===== +1点：中程度シグナル =====
+
+    # HP健康経営記載（既存 HEALTH_KEIEI_REQUIRED_KEYWORDS と同じ）
+    if page_text:
+        for kw in HEALTH_KEIEI_REQUIRED_KEYWORDS:
+            if kw in page_text:
+                score += 1
+                reasons.append("+1 HP健康経営記載")
+                break
+
+    # 法定外福利厚生記載
+    if page_text:
+        fukuri_kws = ["人間ドック", "マッサージ", "社員旅行", "リフレッシュ休暇",
+                      "リラクゼーション", "ジム利用", "保養所", "社内託児"]
+        for kw in fukuri_kws:
+            if kw in page_text:
+                score += 1
+                reasons.append(f"+1 法定外福利厚生記載({kw})")
+                break
+
+    # 立地（都心一等地）
+    location = classify_location(address)
+    if location == "prime":
+        score += 1
+        reasons.append("+1 立地:都心一等地/Aクラス")
+
+    return score, reasons
+
+
+def evaluate_negative_conditions(
+    company_info: dict, page_text: str = ""
+) -> tuple[int, list[str]]:
+    """減点条件を評価する（49社分析からの減点条件）.
+
+    Args:
+        company_info: scraperで取得した企業情報
+        page_text: HP本文
+
+    Returns:
+        (score, reasons): 減点合計（負の値）と理由リスト
+    """
+    score = 0
+    reasons: list[str] = []
+
+    industry = company_info.get("industry", "") or ""
+
+    # ===== -2点：強いマイナス =====
+
+    # 業種カテゴリ判定（-2点）
+    category = classify_industry_category(industry)
+    if category in ("製造業", "IT/通信", "コンサル・サービス"):
+        score -= 2
+        reasons.append(f"-2 業種:{category}")
+
+    # 業界利益率「中」（レッドオーシャン）
+    profit = classify_industry_profit(industry)
+    if profit == "medium":
+        # 大手プライム子会社例外（伊藤忠等）はチェック
+        if not (page_text and is_parent_prime_subsidiary(page_text)):
+            score -= 2
+            reasons.append("-2 業界利益率「中」(レッドオーシャン)")
+
+    # 業界離職率「中」
+    turnover = classify_industry_turnover(industry)
+    if turnover == "medium":
+        # 既に製造業で-2減点されている場合は重複しない
+        if category != "製造業":
+            score -= 2
+            reasons.append("-2 業界離職率「中」")
+
+    # ===== -1点：中程度マイナス =====
+
+    # 立地（地方・都市部近郊・都市部）
+    address = company_info.get("address", "") or ""
+    location = classify_location(address)
+    if location == "local":
+        score -= 1
+        reasons.append("-1 立地:地方/都市部")
+
+    # 創業家オーナー判定
+    if page_text and is_founder_owner(page_text):
+        score -= 1
+        reasons.append("-1 創業家オーナー")
+
+    return score, reasons
+
+
+# ── 統合評価関数（v2）───────────────────────────────────
+
+
+def evaluate_rank_v2(
+    company_info: dict,
+    search_results: list[dict],
+    page_text: str = "",
+) -> dict:
+    """Phase 2 統合ランク判定（必須条件NG → 加点 - 減点）.
+
+    既存の evaluate_rank() を破壊せず、並列追加。
+
+    Args:
+        company_info: scraperで取得した企業情報
+        search_results: 検索結果リスト
+        page_text: HP本文
+
+    Returns:
+        {
+            "rank": "A" / "B" / "C" / "NG",
+            "score": int (加点-減点の合計),
+            "reasons": list[str] (理由),
+            "useful_score": int,
+            "negative_score": int,
+            "ng_reason": str (NG時のみ),
+        }
+    """
+    # ===== 必須条件NGチェック（既存ロジックを使う） =====
+    # 既存の evaluate_rank() の必須NG部分を踏襲
+    existing_result = evaluate_rank(company_info, search_results, page_text=page_text)
+    if existing_result.get("rank") == "NG":
+        # 既存NG判定に従う
+        return {
+            "rank": "NG",
+            "score": -99,
+            "reasons": existing_result.get("reasons", []),
+            "useful_score": 0,
+            "negative_score": 0,
+            "ng_reason": existing_result.get("ng_reason", ""),
+        }
+
+    # ===== 加点 - 減点で総合スコア =====
+    useful_score, useful_reasons = evaluate_useful_conditions(company_info, page_text)
+    negative_score, negative_reasons = evaluate_negative_conditions(company_info, page_text)
+    total_score = useful_score + negative_score
+
+    # ===== ランク決定（Phase 2の閾値） =====
+    if total_score >= 5:
+        rank = "A"
+    elif total_score >= 2:
+        rank = "B"
+    elif total_score >= 0:
+        rank = "C"
+    else:
+        rank = "NG"
+
+    all_reasons = useful_reasons + negative_reasons
+
+    return {
+        "rank": rank,
+        "score": total_score,
+        "reasons": all_reasons,
+        "useful_score": useful_score,
+        "negative_score": negative_score,
+    }
