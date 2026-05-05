@@ -21,3 +21,7 @@ main.py.bak
 main.py.bak.*
 main.py.bak
 *.bak.*
+
+# 顧客分析データ（秘匿）
+data/*.xlsx
+data/*.csv
