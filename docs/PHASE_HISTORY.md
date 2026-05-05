@@ -761,3 +761,85 @@ PR タイトル:
 4. 加点項目を増やす提案より、データの再検証を先にやるべき
 ```
 
+---
+
+## Phase 5 実装完了（2026-05-06）
+
+### 実装内容
+
+```
+Step 1: 49社シミュレーション
+   - scripts/phase5_simulation.py 作成・実行
+   - Scenario C（v2.0 フル配点）の結果:
+     継続14社: A/B率 50%（7社 A/B）
+     解約24社: C/NG率 79%（19社 C/NG）
+   - ランク閾値確定: A:8点以上 / B:5-7点 / C:1-4点 / NG:0点以下
+
+Step 2: Phase 1必須条件 緩和（rank_agent.py）
+   - ③ HP健康経営記載必須 → 削除（S4 加点に降格）
+   - ④ HP採用情報必須     → 削除（加点に降格）
+   - ⑤ 福利厚生記載必須   → 削除（S3 加点に降格）
+   - ①②⑥は維持
+
+Step 3: キーワード定義（config.py）
+   - ISO_CERT_KEYWORDS（"ISO"+"番号"パターン）
+   - SDGS_CERT_KEYWORDS（"SDGs"+"宣言/目標/活動"等）
+   - PRESIDENT_MSG_URL_KEYWORDS / PRESIDENT_MSG_HEALTH_KEYWORDS
+   - PROFITABLE_INDUSTRY_KEYWORDS（高収益業種リスト）
+
+Step 4: 加点判定関数 4本追加（rank_agent.py）
+   - check_s7_iso_cert(page_text) → (bool, str)
+   - check_s8_sdgs(page_text) → (bool, str)
+   - check_s9_president_health(page_text) → (bool, str)
+   - check_s10_profitable_industry(page_text, company_info) → (int, str)
+     ※ S10 は Stage1(+1点) / Stage2(+3点) の2段階判定
+
+Step 5: check_interaction_bonus(signals) → (int, str)
+   - 3点セット6種（継続率100%の組み合わせ）
+   - 5シグナル以上保有
+   - 重複加算なし
+
+Step 6+7: evaluate_useful_conditions に統合
+   - extra_signals パラメータ追加（S1/S2/S5/S6 を evaluate_rank_v2 から渡す）
+   - S7/S8/S9/S10 の判定を評価内に追加
+   - check_interaction_bonus を呼び出して合算
+   - evaluate_rank_v2 のランク閾値更新（A:8 / B:5 / C:1）
+
+Step 8: テスト追加（tests/test_phase5_signals.py）
+   - 25テスト追加
+   - 全119件 PASS
+```
+
+### コミット
+
+```
+99570e1 Phase 5 Step 2: Phase 1必須条件③④⑤を削除
+0dbb9be Phase 5 Step 3: S7/S8/S9/S10 キーワード定義を config.py に追加
+be477d5 Phase 5 Step 4: S7/S8/S9/S10 の加点判定関数を rank_agent.py に追加
+af1bcfb Phase 5 Step 5: check_interaction_bonus 関数を rank_agent.py に追加
+28677cf Phase 5 Step 6: evaluate_useful_conditions に S7/S8/S9/S10 + 相互作用ボーナスを統合
+4c7d3dc Phase 5 Step 8: tests/test_phase5_signals.py 追加（25テスト・119件PASS）
+
+ブランチ: feature/phase5-relax-must-conditions
+push 状態: 未実施（Step 10 で実施予定）
+```
+
+### 重要な設計判断（Phase 5 v2.0 で確定）
+
+```
+1. S9（社長メッセージ詳細）は簡易版に変更
+   - X列（4.3倍差）は人間手動判定のため自動化不可
+   - URLパス + 健康キーワードの2条件で簡易判定（+1点）
+   - 詳細実装は将来課題として保留
+
+2. S10 は Stage2 フル実装を採用
+   - 従業員数・大手プライム子会社・資本金1億円の3条件を検証
+   - 全て company_info / page_text から取得可能なため Stage2 実装
+   - Stage1 +1点 / Stage2 +3点 の2段階
+
+3. 健康経営認定は「1.84倍差の正の予測子」
+   - 旧ドキュメントの「逆相関（69% vs 20%）」は分母の取り方が誤りだった
+   - 正: 継続55% vs 解約30%（継続/解約 38社のみで計算）
+   - ③を削除した理由は「弱い予測子」ではなく「網を広げるため」
+```
+

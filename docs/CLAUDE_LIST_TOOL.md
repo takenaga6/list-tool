@@ -92,91 +92,86 @@ list_tool/
 
 ---
 
-## ⚡ 現在の状態（2026-04-30 時点）
+## ⚡ 現在の状態（2026-05-06 時点）
 
 ### ブランチ
 
 ```
-作業ブランチ: feature/phase4-deep-scraper
-   - Phase 4 Step 1+2 実装済（コミット3個）
-   - push 未実施 ← 重要
-   
+作業ブランチ: feature/phase5-relax-must-conditions
+   - Phase 5 全ステップ（Step 1〜8）実装済
+   - Step 9: ドキュメント更新（現在）
+   - Step 10: push + PR + マージ + Render反映（次のアクション）
+
 最新コミット:
-- 9878ba4 Phase 4 Step 2.4: 企業名抽出のゴミ混入を除外
-- 485ef37 Phase 4 Step 2: list_page_agent 企業名抽出バグ修正
-- 814d27f Phase 4 Step 1: HEALTH_KEIEI_REQUIRED_KEYWORDS 拡充
+- 4c7d3dc Phase 5 Step 8: tests/test_phase5_signals.py 追加（25テスト・119件PASS）
+- 28677cf Phase 5 Step 6: evaluate_useful_conditions に S7/S8/S9/S10 + 相互作用ボーナスを統合
+- af1bcfb Phase 5 Step 5: check_interaction_bonus 関数を rank_agent.py に追加
+- be477d5 Phase 5 Step 4: S7/S8/S9/S10 の加点判定関数を rank_agent.py に追加
+- 0dbb9be Phase 5 Step 3: S7/S8/S9/S10 キーワード定義を config.py に追加
+- 99570e1 Phase 5 Step 2: Phase 1必須条件③④⑤を削除
 
-main 最新コミット: 0399ba6（Phase 3 完了時）
+main 最新コミット: 58a2d1d（Phase 4 PR #6 マージ済）
 ```
 
-### Phase 4 の状態
+### Phase 5 の状態
 
 ```
-✅ Step 1: HEALTH_KEIEI_REQUIRED_KEYWORDS 拡充（12→35個）
-✅ Step 2: list_page_agent COMPANY_NAME_PATTERNS 修正（除外文字に括弧追加）
-✅ Step 2.4: 企業名抽出ゴミ混入除外（数字+ピリオド始まり）
-
-🛑 Step 3: deep_scraper_agent 中止
-   理由: 49社契約企業データ再分析で「ツール設計の根本問題」が判明
-   詳細: docs/DECISION_LOG.md 参照（存在すれば）
-
-⏸ 残作業: 
-   - push + PR + マージ + Render反映
-   - これは次のセッションで実行可能
+✅ Step 1: 49社シミュレーション（scripts/phase5_simulation.py）
+✅ Step 2: Phase 1必須条件③④⑤削除（健康経営記載/採用情報/福利厚生 → 加点に降格）
+✅ Step 3: S7/S8/S9/S10 キーワード定義（config.py）
+✅ Step 4: 加点判定関数追加（rank_agent.py）
+✅ Step 5: check_interaction_bonus 関数追加
+✅ Step 6: evaluate_useful_conditions に統合（+ evaluate_rank_v2 閾値更新）
+✅ Step 7: ランク閾値確定（A:8点以上 / B:5-7点 / C:1-4点 / NG:0点以下）
+✅ Step 8: テスト追加（25テスト追加・119件全PASS）
+🔄 Step 9: ドキュメント更新（現在）
+⏸ Step 10: push + PR + マージ + Render反映（次のアクション）
 ```
 
 ### テスト
 
 ```
-全テスト 94件 PASS
-- Step 1+2 で 81→94 件に増加
-- 新規追加: tests/test_list_page_agent.py（10件）
+全テスト 119件 PASS
+- Phase 5 で 94→119 件に増加（+25件）
+- 新規追加: tests/test_phase5_signals.py（25件）
+  - TestPhase1Relaxation（5件）: ③④⑤削除の確認
+  - TestS7IsoCert（2件）/ TestS8Sdgs（2件）
+  - TestS9PresidentHealth（4件）/ TestS10ProfitableIndustry（4件）
+  - TestInteractionBonus（6件）
+  - その他（2件）
 ```
 
 ---
 
-## 🚨 重要な意思決定（明日朝の設計再構築の出発点）
+## ✅ Phase 5 設計判断（2026-05-06 完了）
 
-### 49社契約企業データ再分析（2026-04-30 夜）
-
-```
-驚愕の事実:
-- 優良継続中（14社）: 健康経営認定あり 35% / なし 64%
-- 解約済み（24社）: 健康経営認定あり 83% / なし 16%
-
-つまり:
-- 健康経営認定なしの継続率: 69%
-- 健康経営認定ありの継続率: 20%
-- 健康経営認定企業の方が解約率が高い
-
-含意:
-- 健康経営認定は「契約獲得しやすい」シグナル
-- でも「継続しやすい」シグナルではない（むしろ逆）
-- Phase 1必須条件「健康経営記載」必須が厳しすぎた可能性
-
-健康経営なしで継続している企業（実例）:
-- 瓜生法律事務所、SBI証券、レンフロジャパン
-- ロッテベンチャーズジャパン、伊藤忠モードパル
-- FBモーゲージ、桜川サービス、グランドバリュー、YN10
-```
-
-### ツール設計再検討の3選択肢
+### 49社契約企業データ再集計（正しい数字）
 
 ```
-設計1（現状）: 継続率の高い企業を絞り込む
-   → Phase 1必須条件を厳しく設定
-   → でも継続率の予測子として「健康経営認定」は弱い
+【重要】旧ドキュメント（2026-04-30）の数字は誤りだった。Phase 5 v2.0 で訂正済み。
 
-設計2（ユーザー提案）: 健康経営認証リストから絞り込むだけのシンプルツール
-   → 「契約獲得率」軸で運用
-   → 開発コスト大幅減
+【旧（誤り）】
+- 健康経営認定なしの継続率: 69% / ありの継続率: 20%（逆相関と誤判断）
 
-設計3（折衷）: 必須条件を緩和（健康経営記載を加点に降格）
-   → 業種NG・規模フィルタは維持
-   → 健康経営記載・採用・福利厚生は加点
-   → ISO・SDGs・社長メッセージ詳細を加点シグナルに追加
+【正（Phase 5 v2.0 確定）】
+- 健康経営認定あり → 継続率 55%
+- 健康経営認定なし → 継続率 30%
+- 1.84倍差（正の予測子）
 
-明日朝、この3択から事業判断が必要
+詳細シグナル倍率（継続14社 vs 解約24社 で計算）:
+- ISO認定: 2.42倍差 → S7 +2点
+- SDGs宣言: 1.84倍差 → S8 +1点
+- 社長メッセージ詳細: 2.46倍差 → S9 +1点（自動判定限界で減額）
+- 儲かっている業界: 最大3.27倍差 → S10 +1〜+3点（最強シグナル）
+```
+
+### 選択された設計（設計3: 折衷案）
+
+```
+→ Phase 1必須条件 ③④⑤ を削除（加点に降格）
+→ S7/S8/S9/S10 新設・相互作用ボーナス追加
+→ 継続率100%の3点セット組み合わせをボーナスで報酬
+→ Phase 5 全ステップ実装完了（2026-05-06）
 ```
 
 ---
@@ -187,42 +182,47 @@ main 最新コミット: 0399ba6（Phase 3 完了時）
 
 ```
 3段階判定:
-1. pre_screen（118行目）: スクレイピング前・軽量NG（HTTPなし）
-2. evaluate_rank（267行目）: Phase 1必須条件チェック（旧ロジック）
-3. evaluate_rank_v2（804行目）: Phase 2 加点-減点・ランクA/B/C/NG
-   - 5点以上=A / 2-4点=B / 0-1点=C / それ以下=NG
+1. pre_screen: スクレイピング前・軽量NG（HTTPなし）
+2. evaluate_rank: Phase 1必須条件チェック（①②⑥のみ有効・③④⑤は Phase 5 で削除）
+3. evaluate_rank_v2: S1〜S10 + 相互作用ボーナスでランクA/B/C/NG
+   - 8点以上=A / 5-7点=B / 1-4点=C / 0点以下=NG（Phase 5 v2.0）
 ```
 
-### Phase 1必須条件（rank_agent.py 199行・check_phase1_must_conditions）
+### Phase 1必須条件（rank_agent.py・check_phase1_must_conditions）
 
 ```
-1つでも違反でNG:
-① 業種NG: NG_INDUSTRY_KEYWORDS_PHASE1（9個・広告/メディア系）
-② レッドオーシャン業種: INDUSTRY_PROFIT_MEDIUM_KEYWORDS（6個・SI/総合商社）
+1つでも違反でNG（Phase 5 以降）:
+① 業種NG: NG_INDUSTRY_KEYWORDS_PHASE1（9個・広告/メディア系）★維持
+② レッドオーシャン業種: INDUSTRY_PROFIT_MEDIUM_KEYWORDS（6個・SI/総合商社）★維持
    - 例外: 大手プライム子会社
-③ HP健康経営記載必須: HEALTH_KEIEI_REQUIRED_KEYWORDS（35個・Step 1拡充後）
-④ HP採用情報必須: RECRUIT_PAGE_REQUIRED_KEYWORDS（10個）
-⑤ 福利厚生記載必須: WELFARE_KEYWORDS（26個）
-   - 例外: 士業/投資運用（FUKURI_LEGAL_ONLY_OK_INDUSTRY 17個）
-⑥ 従業員数フィルター:
+~~③ HP健康経営記載必須~~ → Phase 5 で S4 加点に降格（削除済）
+~~④ HP採用情報必須~~     → Phase 5 で加点に降格（削除済）
+~~⑤ 福利厚生記載必須~~   → Phase 5 で S3 加点に降格（削除済）
+⑥ 従業員数フィルター: ★維持
    - 6名未満NG / 6-9名は士業のみ / 10-199名OK
    - 200-499名空白帯NG / 500名以上は大手プライム子会社のみ
 ```
 
-### S1〜S6 加点シグナル（Phase 2）
+### S1〜S10 加点シグナル（Phase 2 + Phase 5）
 
 ```
-S1: PR有料媒体掲載（KENJA GLOBAL等）
-S2: 健康経営メディア掲載（アクサ生命等）
-S3: 法定外福利厚生記載
-S4: 健康経営注力
-S5: 半年以内のHPリニューアル
-S6: 自社ビル保有
+S1: PR有料媒体掲載（KENJA GLOBAL等）+1点
+S2: 健康経営メディア掲載（アクサ生命等）+1点
+S3: 法定外福利厚生記載（旧⑤必須から降格）+1点
+S4: 健康経営注力（旧③必須から降格）+1点
+S5: 半年以内のHPリニューアル +1点
+S6: 自社ビル保有 +1点
+S7: ISO認定取得（ISO9001/14001/27001/45001等）+2点　★Phase 5 新設
+S8: SDGs/サステナビリティ宣言 +1点　★Phase 5 新設
+S9: 社長メッセージ内健康記載（簡易版）+1点　★Phase 5 新設
+S10: 儲かっている業界フラグ +1〜+3点　★Phase 5 新設（最強シグナル）
 
-設計ルール:
-- S1/S2あり時点でB確定
-- S1/S2 + S3〜S6が2つ以上 → A
-- S1/S2なしの場合、S3〜S6合計3つ以上 → B
+相互作用ボーナス（いずれか1つ発動で +3点・重複なし）:
+- 3点セット（健康経営×ISO×採用高 等 6種）完成
+- シグナル5個以上保有
+
+ランク閾値（Phase 5 v2.0）:
+- A: 8点以上 / B: 5-7点 / C: 1-4点 / NG: 0点以下
 ```
 
 ### 媒体リスト（config.py 48-58行）
@@ -258,25 +258,24 @@ v1→v2 自動マイグレーション
 
 ---
 
-## 🚨 既知の課題（朝のリストアップ問題）
+## ✅ 解消済み課題（朝のリストアップ問題）
 
-### 朝のリストアップ実行（2026-04-30 朝・17分・登録0件）
+### 朝のリストアップ実行（2026-04-30 朝・17分・登録0件）→ Phase 5 で対応済み
 
 ```
 発生事象:
 - list_page_agent: kenko-keiei.jp から 21,375社抽出
 - でも処理した5社全部が「Phase1必須条件NG: HP健康経営記載なし」で弾かれた
 
-真因（4つ）:
+真因と対応状況:
 A. list_page_agent の HTML 抽出バグ（COMPANY_NAME_PATTERNS）
-   → ✅ Step 2 で修正済
+   → ✅ Phase 4 Step 2 で修正済
 B. scraper_agent はトップページ＋一部サブページのみ取得
-   → ⏸ 採用ページ・CSRページの「健康経営」記載を見逃す
-   → 未対応（deep_scraper検討も中止）
-C. 検索クエリで無関係URL返却（hoken-mammoth.com 等）
-   → 一部発動・対症療法
-D. Phase 1必須条件「健康経営記載」が厳しすぎる可能性
-   → ⚠️ 49社データ再分析で判明（ツール設計の根本問題）
+   → ⚠️ 未対応（deep_scraper は中止）ただし C の対応で軽減
+C. 検索クエリで無関係URL返却
+   → 一部発動・対症療法（継続課題）
+D. Phase 1必須条件「健康経営記載」が厳しすぎる
+   → ✅ Phase 5 Step 2 で③④⑤を削除。根本対応完了。
 ```
 
 ---
@@ -310,31 +309,17 @@ D. Phase 1必須条件「健康経営記載」が厳しすぎる可能性
 ```
 1. このファイルを読む
 2. CLAUDE.md（個人OS）を読む
-3. agents/CLAUDE.md を読む
-4. docs/DECISION_LOG.md を読む（明日朝以降に作成予定）
-5. git status で現在のブランチ確認
-6. 何をやろうとしているかユーザーに確認
+3. docs/DECISION_LOG.md を読む
+4. git status で現在のブランチ確認
+5. 何をやろうとしているかユーザーに確認
 ```
 
-### 残作業
+### 残作業（Phase 5 Step 10）
 
 ```
-A. Phase 4 Step 1+2 の push + マージ + Render反映
-   - feature/phase4-deep-scraper をmainにマージ
-   - PRタイトル: "Phase 4 Step 1+2: キーワード拡充 + 企業名抽出バグ修正"
-   - PR本文は CHAT履歴の前半参照
-   - マージ後、自動再デプロイ確認
-
-B. ツール設計再構築（明日朝以降）
-   - 上記「ツール設計再検討の3選択肢」から判断
-   - 49社契約企業分析シート（/mnt/user-data/uploads/2026年営業分析シート__3_.xlsx）を再分析
-   - 設計2（シンプル化）の真剣検討
-
-C. ドキュメント整備（時間あれば）
-   - docs/PHASE_HISTORY.md 作成（Phase 1〜4 実装履歴）
-   - docs/DECISION_LOG.md 作成（30時間の意思決定）
-   - docs/PHASE4_STATUS.md 作成（現状サマリー）
-   - 既存 docs/ 各ファイルの Phase 3+4 反映
+feature/phase5-relax-must-conditions の push + PR + マージ + Render反映
+PRタイトル: "Phase 5: Phase 1必須条件緩和 + 加点シグナル拡充（S7-S10 + 相互作用ボーナス）"
+マージ後、本番でリストアップ実行して登録件数確認
 ```
 
 ---
@@ -395,6 +380,28 @@ C. ドキュメント整備（時間あれば）
 ---
 
 ## 📅 直近のセッション履歴
+
+### 2026-05-06（Phase 5 実装セッション）
+
+```
+設計: Phase 5 v1.0 の穴を突いて v2.0 に刷新
+   - 49社データ再集計で「逆相関」は誤りと確定（1.84倍差・正の予測子）
+   - S9 自動判定不可の問題を発見・簡易版に変更
+   - S10 は S10/S11/S12 を統合（業界属性の過大評価を防止）
+   - 相互作用ボーナス設計（継続率100%の3点セット6種）
+
+実装: Step 1〜8 完全実施
+   - Step 1: 49社シミュレーション（Scenario C で精度確認）
+   - Step 2: Phase 1必須条件③④⑤削除
+   - Step 3: キーワード定義（config.py）
+   - Step 4: 加点関数 4本追加
+   - Step 5: check_interaction_bonus 追加
+   - Step 6+7: evaluate_useful_conditions 統合・閾値更新
+   - Step 8: テスト25件追加（119件PASS）
+
+テスト結果: 119件全PASS
+現在: Step 9（ドキュメント更新中）
+```
 
 ### 2026-04-30（13時間以上の長セッション）
 
