@@ -792,6 +792,53 @@ def check_s10_profitable_industry(
     return (3, hits) if stage2_passed else (1, hits)
 
 
+def check_interaction_bonus(signals: dict) -> tuple[int, str]:
+    """相互作用ボーナス判定（49社データで継続率100%の組み合わせ・+3点）.
+
+    3点セット6種（49社データで継続率100%・すべて ISO または 採用高 を含む）:
+      - s4_kenko_keiei + s7_iso + s10_profitable  (健康経営+ISO+儲かる業界)
+      - s4_kenko_keiei + s7_iso + s8_sdgs         (健康経営+ISO+SDGs)
+      - s4_kenko_keiei + s7_iso + s9_president_health  (健康経営+ISO+社長健康)
+      - s7_iso + s9_president_health + s10_profitable  (ISO+社長健康+儲かる業界)
+      - s7_iso + s9_president_health + s3_welfare  (ISO+社長健康+福利厚生)
+      - s4_kenko_keiei + s8_sdgs + s10_profitable  (健康経営+SDGs+儲かる業界)
+
+    ボーナス条件（重複加算なし・どちらかひとつで +3点）:
+      1. 上記6セットのいずれかを完成
+      2. シグナル合計 5個以上保有
+
+    Args:
+        signals: 各シグナルの True/False を収めた dict。
+            想定キー:
+              s1_pr, s2_kenko_media, s3_welfare, s4_kenko_keiei,
+              s5_renewal, s6_jisha_bldg, s7_iso, s8_sdgs,
+              s9_president_health, s10_profitable
+            未定義キーは False 扱い。
+
+    Returns:
+        (bonus_points, reason): bonus_points は 0 または 3
+    """
+    # 3点セット定義（49社データで継続率100%が確認された組み合わせのみ）
+    TRIPLE_SETS = [
+        ("s4_kenko_keiei", "s7_iso", "s10_profitable"),
+        ("s4_kenko_keiei", "s7_iso", "s8_sdgs"),
+        ("s4_kenko_keiei", "s7_iso", "s9_president_health"),
+        ("s7_iso",         "s9_president_health", "s10_profitable"),
+        ("s7_iso",         "s9_president_health", "s3_welfare"),
+        ("s4_kenko_keiei", "s8_sdgs",             "s10_profitable"),
+    ]
+
+    for triple in TRIPLE_SETS:
+        if all(signals.get(s, False) for s in triple):
+            return 3, f"3点セット達成: {'+'.join(triple)}"
+
+    total = sum(1 for v in signals.values() if v)
+    if total >= 5:
+        return 3, f"シグナル{total}個保有"
+
+    return 0, ""
+
+
 def evaluate_useful_conditions(
     company_info: dict, page_text: str = ""
 ) -> tuple[int, list[str]]:
