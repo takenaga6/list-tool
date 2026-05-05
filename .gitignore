@@ -25,3 +25,7 @@ main.py.bak
 # 顧客分析データ（秘匿）
 data/*.xlsx
 data/*.csv
+
+# 一時ログファイル
+cleanup_log*.txt
+*.log
