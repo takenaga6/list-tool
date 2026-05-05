@@ -218,21 +218,6 @@ def check_phase1_must_conditions(company_info: dict, page_text: str) -> tuple[bo
             if not is_prime_sub:
                 return False, f"レッドオーシャン業界(利益率中): {ng_kw}"
 
-    # ③④ HP本文がある時のみ判定（pre_screen段階・スニペット限定処理では空）
-    if page_text:
-        # ③ HP健康経営記載なしNG
-        if not any(kw in page_text for kw in HEALTH_KEIEI_REQUIRED_KEYWORDS):
-            return False, "HP健康経営記載なし"
-
-        # ④ HP採用情報なしNG
-        if not any(kw in page_text for kw in RECRUIT_PAGE_REQUIRED_KEYWORDS):
-            return False, "HP採用情報なし"
-
-        # ⑤ 福利厚生「法定のみ」NG（士業・投資運用は例外）
-        has_welfare = any(kw in page_text for kw in WELFARE_KEYWORDS)
-        if not has_welfare and not is_special_industry(full_text):
-            return False, "福利厚生記載なし(士業以外)"
-
     # ⑥ 従業員数フィルター細分化
     emp_count_str = company_info.get("employee_count", "")
     if emp_count_str:
