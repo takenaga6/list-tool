@@ -840,13 +840,18 @@ def check_interaction_bonus(signals: dict) -> tuple[int, str]:
 
 
 def evaluate_useful_conditions(
-    company_info: dict, page_text: str = ""
+    company_info: dict,
+    page_text: str = "",
+    extra_signals: dict | None = None,
 ) -> tuple[int, list[str]]:
-    """加点条件を評価する（49社分析からの加点条件）.
+    """加点条件を評価する（Phase 5拡充版: S7/S8/S9/S10 + 相互作用ボーナス）.
 
     Args:
         company_info: scraperで取得した企業情報
         page_text: HP本文
+        extra_signals: evaluate_rank_v2 から渡す S1/S2/S5/S6 の bool dict。
+            キー: s1_pr, s2_kenko_media, s5_renewal, s6_jisha_bldg。
+            相互作用ボーナスの signals dict に統合される。None の場合は全 False 扱い。
 
     Returns:
         (score, reasons): 加点合計と理由リスト
@@ -866,11 +871,10 @@ def evaluate_useful_conditions(
         score += 2
         reasons.append(f"+2 業種:{category}")
     elif category in ("人材派遣", "投資運用", "士業"):
-        # +1点に該当
         score += 1
         reasons.append(f"+1 業種:{category}")
 
-    # 業界平均利益率（+2 / +1 / -2）
+    # 業界平均利益率（+2 / +1）
     profit = classify_industry_profit(industry)
     if profit == "high":
         score += 2
@@ -896,22 +900,26 @@ def evaluate_useful_conditions(
 
     # ===== +1点：中程度シグナル =====
 
-    # HP健康経営記載（既存 HEALTH_KEIEI_REQUIRED_KEYWORDS と同じ）
+    # HP健康経営記載（S4相当）
+    s4_kenko_keiei = False
     if page_text:
         for kw in HEALTH_KEIEI_REQUIRED_KEYWORDS:
             if kw in page_text:
                 score += 1
-                reasons.append("+1 HP健康経営記載")
+                reasons.append("+1 HP健康経営記載(S4)")
+                s4_kenko_keiei = True
                 break
 
-    # 法定外福利厚生記載
+    # 法定外福利厚生記載（S3相当）
+    s3_welfare = False
     if page_text:
         fukuri_kws = ["人間ドック", "マッサージ", "社員旅行", "リフレッシュ休暇",
                       "リラクゼーション", "ジム利用", "保養所", "社内託児"]
         for kw in fukuri_kws:
             if kw in page_text:
                 score += 1
-                reasons.append(f"+1 法定外福利厚生記載({kw})")
+                reasons.append(f"+1 法定外福利厚生記載(S3:{kw})")
+                s3_welfare = True
                 break
 
     # 立地（都心一等地）
@@ -919,6 +927,65 @@ def evaluate_useful_conditions(
     if location == "prime":
         score += 1
         reasons.append("+1 立地:都心一等地/Aクラス")
+
+    # ===== Phase 5: 新規シグナル S7/S8/S9/S10 =====
+
+    s7_iso = False
+    s8_sdgs = False
+    s9_president_health = False
+    s10_profitable = False
+
+    if page_text:
+        # S7: ISO認定 +2点（49社データ継続率2.42倍差）
+        iso_match, iso_hits = check_s7_iso_cert(page_text)
+        if iso_match:
+            score += 2
+            reasons.append(f"+2 S7:ISO認定({iso_hits[0]})")
+            s7_iso = True
+
+        # S8: SDGs/サステナビリティ +1点（49社データ継続率1.84倍差）
+        sdgs_match, sdgs_hits = check_s8_sdgs(page_text)
+        if sdgs_match:
+            score += 1
+            reasons.append(f"+1 S8:SDGs({sdgs_hits[0]})")
+            s8_sdgs = True
+
+        # S9: 社長メッセージ健康記載 +1点（49社データ継続率2.46倍差・簡易版）
+        if check_s9_president_message_health(page_text):
+            score += 1
+            reasons.append("+1 S9:社長メッセージ健康記載")
+            s9_president_health = True
+
+        # S10: 儲かっている業界 +1/+3点（49社データ継続率3.27倍差・2段階判定）
+        s10_pts, s10_hits = check_s10_profitable_industry(
+            text=page_text,
+            industry_text=industry,
+            company_info=company_info,
+        )
+        if s10_pts > 0:
+            score += s10_pts
+            hit_label = s10_hits[0] if s10_hits else ""
+            reasons.append(f"+{s10_pts} S10:儲かる業界({hit_label})")
+            s10_profitable = True
+
+    # ===== 相互作用ボーナス（3点セット or 5シグナル以上 → +3点）=====
+    base = extra_signals or {}
+    signals = {
+        "s1_pr":               base.get("s1_pr", False),
+        "s2_kenko_media":      base.get("s2_kenko_media", False),
+        "s3_welfare":          s3_welfare,
+        "s4_kenko_keiei":      s4_kenko_keiei,
+        "s5_renewal":          base.get("s5_renewal", False),
+        "s6_jisha_bldg":       base.get("s6_jisha_bldg", False),
+        "s7_iso":              s7_iso,
+        "s8_sdgs":             s8_sdgs,
+        "s9_president_health": s9_president_health,
+        "s10_profitable":      s10_profitable,
+    }
+    bonus, bonus_reason = check_interaction_bonus(signals)
+    if bonus > 0:
+        score += bonus
+        reasons.append(f"+{bonus} 相互作用ボーナス({bonus_reason})")
 
     return score, reasons
 
@@ -1023,16 +1090,24 @@ def evaluate_rank_v2(
         }
 
     # ===== 加点 - 減点で総合スコア =====
-    useful_score, useful_reasons = evaluate_useful_conditions(company_info, page_text)
+    # evaluate_rank で判定した S1/S2/S5/S6 を相互作用ボーナス計算に渡す
+    old_signals = existing_result.get("signals", {})
+    extra_sigs = {
+        "s1_pr":          old_signals.get("S1", False),
+        "s2_kenko_media": old_signals.get("S2", False),
+        "s5_renewal":     old_signals.get("S5", False),
+        "s6_jisha_bldg":  old_signals.get("S6", False),
+    }
+    useful_score, useful_reasons = evaluate_useful_conditions(company_info, page_text, extra_signals=extra_sigs)
     negative_score, negative_reasons = evaluate_negative_conditions(company_info, page_text)
     total_score = useful_score + negative_score
 
-    # ===== ランク決定（Phase 2の閾値） =====
-    if total_score >= 5:
+    # ===== ランク決定（Phase 5閾値: A≥8, B=5-7, C=1-4, NG≤0） =====
+    if total_score >= 8:
         rank = "A"
-    elif total_score >= 2:
+    elif total_score >= 5:
         rank = "B"
-    elif total_score >= 0:
+    elif total_score >= 1:
         rank = "C"
     else:
         rank = "NG"
