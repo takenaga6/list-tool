@@ -10,7 +10,7 @@ import logging
 import requests
 from urllib.parse import urlparse
 from ddgs import DDGS
-from config import MEDIA_NAME_TO_DOMAIN, load_exclude_list_csv, count_japanese_chars, JAPANESE_MIN_CHARS_IN_SNIPPET
+from config import MEDIA_NAME_TO_DOMAIN, load_exclude_list_csv, count_japanese_chars, JAPANESE_MIN_CHARS_IN_SNIPPET, NEWS_SITE_DOMAINS
 
 logger = logging.getLogger(__name__)
 
@@ -400,3 +400,92 @@ def extract_domain(url: str) -> str:
     if domain.startswith("www."):
         domain = domain[4:]
     return domain
+
+
+def _extract_company_name_from_title(title: str, url: str) -> str:
+    """
+    検索結果タイトルから会社名を推定する。
+    「会社名 | サービス名 | ...」「会社名 - 概要」など区切りで分割し、
+    法人格を含むセグメントを返す。見つからなければドメインを返す。
+    """
+    for sep in ["|", "｜", " - ", "－", "—"]:
+        if sep in title:
+            for segment in title.split(sep):
+                segment = segment.strip()
+                if any(kw in segment for kw in _JP_LEGAL_KEYWORDS):
+                    return segment
+    # タイトル全体に法人格があればそのまま使用
+    if any(kw in title for kw in _JP_LEGAL_KEYWORDS):
+        return title.strip()
+    # フォールバック: ドメインからの推定
+    domain = extract_domain(url)
+    return domain.split(".")[0] if domain else ""
+
+
+def get_companies_from_search_queries(
+    queries: list[str],
+    media_name: str = "",
+    max_per_query: int = 20,
+) -> list[dict]:
+    """
+    Phase 5.2: 検索クエリ逆引きで企業URLを収集する。
+
+    SPAサイト（voice-report.jp、daido-kenco-award.jp）はスクレイピング不可のため、
+    各企業が自社サイトで「掲載されました」と発信している記事をGoogleで逆引きする。
+
+    - EXCLUDE_DOMAINS / NEWS_SITE_DOMAINS をフィルタ
+    - ドメイン単位で重複除去
+    - source_confirmed_s2=True を付与（rank_agent が S2 ボーナスを与える）
+    """
+    seen_domains: set[str] = set()
+    results: list[dict] = []
+
+    # NEWS_SITE_DOMAINS: PRニュース配信サービス等（企業HPではない）
+    news_domains_set = set(NEWS_SITE_DOMAINS)
+
+    for query in queries:
+        hits = search_google(query, "", max_per_query)
+        for hit in hits:
+            url = hit.get("url", "")
+            if not url:
+                continue
+
+            domain = extract_domain(url)
+
+            # PRニュース配信サービスなど（企業HPではない）は除外
+            if any(nd in domain for nd in news_domains_set):
+                logger.debug(f"[Phase 5.2] ニュースサイト除外: {url}")
+                continue
+
+            # 媒体ページ（is_media_page=True）は企業HPではないので除外
+            if hit.get("is_media_page"):
+                continue
+
+            # ドメイン重複除去
+            if domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+
+            company_name = _extract_company_name_from_title(
+                hit.get("title", ""), url
+            )
+
+            results.append({
+                "url": url,
+                "title": hit.get("title", ""),
+                "snippet": hit.get("snippet", ""),
+                "search_query": query,
+                "is_media_page": False,
+                "media_domain": "",
+                "file_type": hit.get("file_type", ""),
+                "source_confirmed_s2": True,
+                "company_name": company_name,
+            })
+
+        logger.info(
+            f"[Phase 5.2] {media_name} クエリ「{query}」: "
+            f"{len(hits)}件取得 → 累計{len(results)}社"
+        )
+
+    logger.info(f"[Phase 5.2] {media_name} 完了: {len(results)}社（重複除去後）")
+    return results

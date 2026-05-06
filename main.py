@@ -28,12 +28,13 @@ from config import (
     EXCLUDE_LIST_CSV,
     S1_MEDIA_LIST_URLS,
     S2_MEDIA_LIST_URLS,
+    S2_SEARCH_BASED_QUERIES,
     MEDIA_LIST_URLS,
     MIN_REGISTER_SIGNALS,
     is_excluded_company,
     add_to_excluded_companies,
 )
-from agents.search_agent import extract_domain, search_google
+from agents.search_agent import extract_domain, search_google, get_companies_from_search_queries
 from agents.scraper_agent import scrape_company_info, find_media_article_url
 from agents.rank_agent import evaluate_rank, evaluate_rank_v2, pre_screen
 from agents.hubspot_agent import HubSpotAgent
@@ -1363,6 +1364,31 @@ def run_batch(
                         executor.submit(
                             process_one_company, r, hubspot, combined_results_writer, processed_domains, None
                         ): r for r in list_results
+                    }
+                    for future in as_completed(futures):
+                        status = future.result()
+                        if status in stats:
+                            stats[status] += 1
+                print_progress(stats, start_time)
+
+        # ─── ①.5 Phase 5.2: 検索クエリベースの S2 取得 ─────────────
+        if stats["success"] < target_count and auto_mode and S2_SEARCH_BASED_QUERIES:
+            for s2_media_name, s2_queries in S2_SEARCH_BASED_QUERIES.items():
+                if stats["success"] >= target_count:
+                    break
+                print(f"\n🔎 [Phase 5.2] {s2_media_name}: 検索クエリ逆引き開始...")
+                s2_results = get_companies_from_search_queries(
+                    s2_queries, s2_media_name, max_per_query=20
+                )
+                if not s2_results:
+                    print(f"  → {s2_media_name}: 取得0社")
+                    continue
+                print(f"  → {len(s2_results)}社を処理開始...")
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    futures = {
+                        executor.submit(
+                            process_one_company, r, hubspot, combined_results_writer, processed_domains, None
+                        ): r for r in s2_results
                     }
                     for future in as_completed(futures):
                         status = future.result()
