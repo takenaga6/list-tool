@@ -518,6 +518,7 @@ def process_one_company(
         if not passed:
             title = search_result.get("title", url)[:30]
             print(f"  ✂ スクリーナーNG [{screen_reason}]: {title}")
+            logger.debug(f"[LEARNING] record_ng(スクリーナーNG): query={search_result['search_query']!r}")
             record_ng(search_result["search_query"])
             return "ng"
 
@@ -561,6 +562,7 @@ def process_one_company(
             _ng_name = company_info.get("company_name") or ""
             _ng_reason = rank_result.get("ng_reason", "")
             print(f"  ⛔ NGスキップ: {_ng_name or company_domain} [{_ng_reason}]")
+            logger.debug(f"[LEARNING] record_ng(ランクNG): query={search_result['search_query']!r}")
             record_ng(search_result["search_query"])  # NGをクエリ学習に反映
             add_to_excluded_companies(_ng_name, f"NG: {_ng_reason}")
             # Phase 1必須条件NGの場合、理由をcompany_infoに記録（後続のHubSpot書込用）
@@ -685,6 +687,7 @@ def process_one_company(
                     "元URL":   company_info.get("source_url", ""),
                     "検索クエリ": search_result.get("search_query", ""),
                 })
+                logger.info(f"[LEARNING] record_rank_result: rank={rank_result['rank']}, query={search_result['search_query']!r}")
                 record_rank_result(search_result["search_query"], rank_result["rank"])
                 return "success"
 
@@ -897,6 +900,7 @@ def main():
             search_results = search_google(keyword, period_tbs, MAX_RESULTS_PER_QUERY)
 
             # ヒット数を学習データとして記録
+            logger.info(f"[LEARNING] record_hit: query={keyword!r}, hits={len(search_results)}, source=search:{period_label}")
             record_hit(keyword, len(search_results), source=f"search:{period_label}")
 
             if not search_results:
@@ -1382,6 +1386,7 @@ def run_batch(
                 task_index += 1
                 print(f"\n🔍 [{period_label_i}] 検索中 ({task_index}/{len(search_tasks)}): {keyword}")
                 search_results = search_google(keyword, period_tbs_i, MAX_RESULTS_PER_QUERY)
+                logger.info(f"[LEARNING] record_hit: query={keyword!r}, hits={len(search_results)}, source=search:{period_label_i}")
                 record_hit(keyword, len(search_results), source=f"search:{period_label_i}")
                 if not search_results:
                     no_result_count += 1

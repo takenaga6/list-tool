@@ -1,13 +1,15 @@
+import os
 import unittest
 from unittest.mock import patch, MagicMock
 
+from config import OUTPUT_DIR
 from agents.hubspot_agent import HubSpotAgent
 
 
 class TestHubSpotAgent(unittest.TestCase):
     def setUp(self):
         # ダミートークン / NGリストファイルはテスト用で実際には書き込まれない
-        self.agent = HubSpotAgent(token="test-token", ng_list_file="output/ng_list_test.csv")
+        self.agent = HubSpotAgent(token="test-token", ng_list_file=os.path.join(OUTPUT_DIR, "ng_list_test.csv"))
 
     def test_normalize_phone_common_patterns(self):
         cases = {

@@ -1,5 +1,7 @@
+import os
 from docx import Document
 from docx.shared import Pt
+from config import OUTPUT_DIR as _OUT
 
 doc = Document()
 
@@ -50,13 +52,13 @@ files = [
     ('agents/hubspot_auditor.py', '登録済み企業の事後バリデーション'),
     ('agents/list_page_agent.py', 'リストページ（PDF/Excel/HTML）から一括抽出'),
     ('agents/keyword_agent.py', '検索クエリの自動生成・学習'),
-    ('output/results.csv', '登録成功した企業一覧'),
-    ('output/ng_list.csv', 'NG企業リスト'),
-    ('output/exclude_list.csv', '除外ドメインリスト'),
-    ('output/learned_exclude.json', '自動学習した除外ドメイン'),
-    ('output/domain_fail_stats.json', 'ドメイン失敗カウンター（3回→自動除外）'),
-    ('output/feedback.csv', 'テレアポ結果フィードバック'),
-    ('output/tool.log', '実行ログ'),
+    (os.path.join(_OUT, 'results.csv'), '登録成功した企業一覧'),
+    (os.path.join(_OUT, 'ng_list.csv'), 'NG企業リスト'),
+    (os.path.join(_OUT, 'exclude_list.csv'), '除外ドメインリスト'),
+    (os.path.join(_OUT, 'learned_exclude.json'), '自動学習した除外ドメイン'),
+    (os.path.join(_OUT, 'domain_fail_stats.json'), 'ドメイン失敗カウンター（3回→自動除外）'),
+    (os.path.join(_OUT, 'feedback.csv'), 'テレアポ結果フィードバック'),
+    (os.path.join(_OUT, 'tool.log'), '実行ログ'),
 ]
 t = doc.add_table(rows=1, cols=2)
 t.style = 'Table Grid'

@@ -16,10 +16,12 @@ HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
 GOOGLE_CSE_CX = os.environ.get("GOOGLE_CSE_CX", "")
 
-# 出力ファイル
-# Render Disk を使う場合は環境変数 OUTPUT_DIR にマウントパスを設定する
-# 例: OUTPUT_DIR=/opt/render/project/src/output
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
+# 永続化ディレクトリ
+# Render環境: 環境変数 DATA_DIR=/data （Render Dashboard で設定済み）
+# ローカル環境: DATA_DIR 未設定 → OUTPUT_DIR を参照 → なければ "output"
+DATA_DIR = os.environ.get("DATA_DIR") or os.environ.get("OUTPUT_DIR", "output")
+os.makedirs(DATA_DIR, exist_ok=True)
+OUTPUT_DIR = DATA_DIR  # 後方互換エイリアス（各モジュールでの import を変更不要）
 NG_LIST_FILE = os.path.join(OUTPUT_DIR, "ng_list.csv")
 RESULTS_FILE = os.path.join(OUTPUT_DIR, "results.csv")
 RESULTS_WITH_QUERY_FILE = os.path.join(OUTPUT_DIR, "results_with_query.csv")
