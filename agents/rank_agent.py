@@ -39,6 +39,12 @@ from config import (
     HEALTH_KEIEI_REQUIRED_KEYWORDS,
     RECRUIT_PAGE_REQUIRED_KEYWORDS,
     EMPLOYEE_RANGE_CONFIG,
+    # Phase 5: S7/S8/S9/S10 キーワード
+    ISO_CERT_KEYWORDS,
+    SDGS_KEYWORDS,
+    PRESIDENT_PAGE_PATH_KEYWORDS,
+    PRESIDENT_HEALTH_KEYWORDS,
+    PROFITABLE_INDUSTRY_KEYWORDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -217,21 +223,6 @@ def check_phase1_must_conditions(company_info: dict, page_text: str) -> tuple[bo
         if ng_kw in company_name or ng_kw in industry or ng_kw in page_text[:500]:
             if not is_prime_sub:
                 return False, f"レッドオーシャン業界(利益率中): {ng_kw}"
-
-    # ③④ HP本文がある時のみ判定（pre_screen段階・スニペット限定処理では空）
-    if page_text:
-        # ③ HP健康経営記載なしNG
-        if not any(kw in page_text for kw in HEALTH_KEIEI_REQUIRED_KEYWORDS):
-            return False, "HP健康経営記載なし"
-
-        # ④ HP採用情報なしNG
-        if not any(kw in page_text for kw in RECRUIT_PAGE_REQUIRED_KEYWORDS):
-            return False, "HP採用情報なし"
-
-        # ⑤ 福利厚生「法定のみ」NG（士業・投資運用は例外）
-        has_welfare = any(kw in page_text for kw in WELFARE_KEYWORDS)
-        if not has_welfare and not is_special_industry(full_text):
-            return False, "福利厚生記載なし(士業以外)"
 
     # ⑥ 従業員数フィルター細分化
     emp_count_str = company_info.get("employee_count", "")
@@ -656,14 +647,211 @@ def is_parent_prime_subsidiary_v2(page_text: str) -> bool:
 # ── 加点・減点ロジック ───────────────────────────────────
 
 
-def evaluate_useful_conditions(
-    company_info: dict, page_text: str = ""
+# ─── Phase 5: 新規シグナル S7/S8/S9/S10 ─────────────────────────────────
+
+
+def check_s7_iso_cert(text: str) -> tuple[bool, list[str]]:
+    """S7: ISO認定の有無（49社データで継続率2.42倍差・+2点）.
+
+    継続社の67% vs 解約社の28%が保有。
+    一般語（情報セキュリティ等）を除外し、ISO番号・規格名のみ判定。
+
+    Args:
+        text: 企業HP本文（会社名・業種・ページ全文の結合テキスト）
+
+    Returns:
+        (matched, hit_keywords)
+    """
+    hits = [kw for kw in ISO_CERT_KEYWORDS if kw in text]
+    return (bool(hits), hits)
+
+
+def check_s8_sdgs(text: str) -> tuple[bool, list[str]]:
+    """S8: SDGs/サステナビリティの有無（49社データで継続率1.84倍差・+1点）.
+
+    継続社の55% vs 解約社の30%が保有。
+    「カーボンニュートラル」「脱炭素」だけでは判定しない（v2.0で除外）。
+
+    Args:
+        text: 企業HP本文
+
+    Returns:
+        (matched, hit_keywords)
+    """
+    hits = [kw for kw in SDGS_KEYWORDS if kw in text]
+    return (bool(hits), hits)
+
+
+def check_s9_president_message_health(page_text: str) -> bool:
+    """S9: 社長メッセージ × 健康記載（49社データで継続率2.46倍差・+1点）【簡易版】.
+
+    継続社の71% vs 解約社の29%が保有。
+
+    簡易版の実装方針（別ページ取得なし）:
+    - page_text に社長メッセージページを示すキーワードが含まれる
+    - かつ page_text に健康関連ワードが含まれる
+    - 両方満たせば True
+    別ページ取得をしない理由: ページ取得失敗リスクの回避・処理速度の安定化。
+    精度は正規版（別ページ取得）より落ちるが、誤判定は少ない。
+
+    Args:
+        page_text: 企業HP本文（トップページ全文）
+
+    Returns:
+        True: 社長メッセージページが存在し健康ワードを含む / False: それ以外
+    """
+    if not page_text:
+        return False
+    has_president_page = any(kw in page_text for kw in PRESIDENT_PAGE_PATH_KEYWORDS)
+    has_health_keyword = any(kw in page_text for kw in PRESIDENT_HEALTH_KEYWORDS)
+    return has_president_page and has_health_keyword
+
+
+def _extract_capital_from_text(text: str) -> int:
+    """HP本文から資本金（円）を抽出する。取得できない場合は 0 を返す。
+
+    例: 「資本金 1億円」→ 100,000,000
+        「資本金 3,000万円」→ 30,000,000
+        「資本金：5億2,000万円」→ 520,000,000
+    """
+    if not text:
+        return 0
+    # 億円パターン（例: 1億、5億2,000万）
+    m = re.search(r'資本金[^\d]{0,5}(\d[\d,]*(?:\.\d+)?)億(?:(\d[\d,]*)万)?', text)
+    if m:
+        try:
+            oku = float(m.group(1).replace(',', '')) * 100_000_000
+            man = int(m.group(2).replace(',', '')) * 10_000 if m.group(2) else 0
+            return int(oku) + man
+        except (ValueError, AttributeError):
+            pass
+    # 万円パターン（例: 3,000万円）
+    m = re.search(r'資本金[^\d]{0,5}(\d[\d,]*)万', text)
+    if m:
+        try:
+            return int(m.group(1).replace(',', '')) * 10_000
+        except ValueError:
+            pass
+    return 0
+
+
+def check_s10_profitable_industry(
+    text: str,
+    industry_text: str = "",
+    company_info: dict | None = None,
 ) -> tuple[int, list[str]]:
-    """加点条件を評価する（49社分析からの加点条件）.
+    """S10: 儲かっている業界フラグ（49社データで継続率3.27倍差・+3点）【2段階判定】.
+
+    年収B以上(3.27倍)・業界利益率高め(2.89倍)・業界離職率低め(2.56倍) を統合。
+
+    2段階判定:
+      Stage1: PROFITABLE_INDUSTRY_KEYWORDS にキーワードが含まれる → +1点
+              ※ Stage1 単体では継続率差 0.90倍（業種マッチのみでは弱い）
+      Stage2: Stage1 + 以下のいずれかを満たす → +3点
+              - 従業員数 50名以上（company_info["employee_count"]）
+              - 大手プライム子会社（is_parent_prime_subsidiary）
+              - 資本金1億円以上（page_text から正規表現抽出）
+
+    Args:
+        text: 企業HP本文（ページ全文）
+        industry_text: HubSpot業種フィールドや company_info["industry"]
+        company_info: scraper が返した企業情報 dict
+
+    Returns:
+        (points, hit_keywords): points は 0 / 1 / 3
+    """
+    target_text = (industry_text or "") + " " + text
+
+    # Stage1: キーワードマッチ
+    hits = [kw for kw in PROFITABLE_INDUSTRY_KEYWORDS if kw in target_text]
+    if not hits:
+        return 0, []
+
+    # Stage2: 規模・親会社・資本金フィルター
+    stage2_passed = False
+
+    # 条件A: 従業員数 50名以上
+    if company_info:
+        emp_str = company_info.get("employee_count", "")
+        if emp_str:
+            try:
+                emp = int(re.sub(r"\D", "", str(emp_str)))
+                if emp >= 50:
+                    stage2_passed = True
+            except ValueError:
+                pass
+
+    # 条件B: 大手プライム子会社
+    if not stage2_passed and is_parent_prime_subsidiary(target_text):
+        stage2_passed = True
+
+    # 条件C: 資本金1億円以上（page_text から抽出）
+    if not stage2_passed and _extract_capital_from_text(text) >= 100_000_000:
+        stage2_passed = True
+
+    return (3, hits) if stage2_passed else (1, hits)
+
+
+def check_interaction_bonus(signals: dict) -> tuple[int, str]:
+    """相互作用ボーナス判定（49社データで継続率100%の組み合わせ・+3点）.
+
+    3点セット6種（49社データで継続率100%・すべて ISO または 採用高 を含む）:
+      - s4_kenko_keiei + s7_iso + s10_profitable  (健康経営+ISO+儲かる業界)
+      - s4_kenko_keiei + s7_iso + s8_sdgs         (健康経営+ISO+SDGs)
+      - s4_kenko_keiei + s7_iso + s9_president_health  (健康経営+ISO+社長健康)
+      - s7_iso + s9_president_health + s10_profitable  (ISO+社長健康+儲かる業界)
+      - s7_iso + s9_president_health + s3_welfare  (ISO+社長健康+福利厚生)
+      - s4_kenko_keiei + s8_sdgs + s10_profitable  (健康経営+SDGs+儲かる業界)
+
+    ボーナス条件（重複加算なし・どちらかひとつで +3点）:
+      1. 上記6セットのいずれかを完成
+      2. シグナル合計 5個以上保有
+
+    Args:
+        signals: 各シグナルの True/False を収めた dict。
+            想定キー:
+              s1_pr, s2_kenko_media, s3_welfare, s4_kenko_keiei,
+              s5_renewal, s6_jisha_bldg, s7_iso, s8_sdgs,
+              s9_president_health, s10_profitable
+            未定義キーは False 扱い。
+
+    Returns:
+        (bonus_points, reason): bonus_points は 0 または 3
+    """
+    # 3点セット定義（49社データで継続率100%が確認された組み合わせのみ）
+    TRIPLE_SETS = [
+        ("s4_kenko_keiei", "s7_iso", "s10_profitable"),
+        ("s4_kenko_keiei", "s7_iso", "s8_sdgs"),
+        ("s4_kenko_keiei", "s7_iso", "s9_president_health"),
+        ("s7_iso",         "s9_president_health", "s10_profitable"),
+        ("s7_iso",         "s9_president_health", "s3_welfare"),
+        ("s4_kenko_keiei", "s8_sdgs",             "s10_profitable"),
+    ]
+
+    for triple in TRIPLE_SETS:
+        if all(signals.get(s, False) for s in triple):
+            return 3, f"3点セット達成: {'+'.join(triple)}"
+
+    total = sum(1 for v in signals.values() if v)
+    if total >= 5:
+        return 3, f"シグナル{total}個保有"
+
+    return 0, ""
+
+
+def evaluate_useful_conditions(
+    company_info: dict,
+    page_text: str = "",
+    extra_signals: dict | None = None,
+) -> tuple[int, list[str]]:
+    """加点条件を評価する（Phase 5拡充版: S7/S8/S9/S10 + 相互作用ボーナス）.
 
     Args:
         company_info: scraperで取得した企業情報
         page_text: HP本文
+        extra_signals: evaluate_rank_v2 から渡す S1/S2/S5/S6 の bool dict。
+            キー: s1_pr, s2_kenko_media, s5_renewal, s6_jisha_bldg。
+            相互作用ボーナスの signals dict に統合される。None の場合は全 False 扱い。
 
     Returns:
         (score, reasons): 加点合計と理由リスト
@@ -683,11 +871,10 @@ def evaluate_useful_conditions(
         score += 2
         reasons.append(f"+2 業種:{category}")
     elif category in ("人材派遣", "投資運用", "士業"):
-        # +1点に該当
         score += 1
         reasons.append(f"+1 業種:{category}")
 
-    # 業界平均利益率（+2 / +1 / -2）
+    # 業界平均利益率（+2 / +1）
     profit = classify_industry_profit(industry)
     if profit == "high":
         score += 2
@@ -713,22 +900,26 @@ def evaluate_useful_conditions(
 
     # ===== +1点：中程度シグナル =====
 
-    # HP健康経営記載（既存 HEALTH_KEIEI_REQUIRED_KEYWORDS と同じ）
+    # HP健康経営記載（S4相当）
+    s4_kenko_keiei = False
     if page_text:
         for kw in HEALTH_KEIEI_REQUIRED_KEYWORDS:
             if kw in page_text:
                 score += 1
-                reasons.append("+1 HP健康経営記載")
+                reasons.append("+1 HP健康経営記載(S4)")
+                s4_kenko_keiei = True
                 break
 
-    # 法定外福利厚生記載
+    # 法定外福利厚生記載（S3相当）
+    s3_welfare = False
     if page_text:
         fukuri_kws = ["人間ドック", "マッサージ", "社員旅行", "リフレッシュ休暇",
                       "リラクゼーション", "ジム利用", "保養所", "社内託児"]
         for kw in fukuri_kws:
             if kw in page_text:
                 score += 1
-                reasons.append(f"+1 法定外福利厚生記載({kw})")
+                reasons.append(f"+1 法定外福利厚生記載(S3:{kw})")
+                s3_welfare = True
                 break
 
     # 立地（都心一等地）
@@ -736,6 +927,65 @@ def evaluate_useful_conditions(
     if location == "prime":
         score += 1
         reasons.append("+1 立地:都心一等地/Aクラス")
+
+    # ===== Phase 5: 新規シグナル S7/S8/S9/S10 =====
+
+    s7_iso = False
+    s8_sdgs = False
+    s9_president_health = False
+    s10_profitable = False
+
+    if page_text:
+        # S7: ISO認定 +2点（49社データ継続率2.42倍差）
+        iso_match, iso_hits = check_s7_iso_cert(page_text)
+        if iso_match:
+            score += 2
+            reasons.append(f"+2 S7:ISO認定({iso_hits[0]})")
+            s7_iso = True
+
+        # S8: SDGs/サステナビリティ +1点（49社データ継続率1.84倍差）
+        sdgs_match, sdgs_hits = check_s8_sdgs(page_text)
+        if sdgs_match:
+            score += 1
+            reasons.append(f"+1 S8:SDGs({sdgs_hits[0]})")
+            s8_sdgs = True
+
+        # S9: 社長メッセージ健康記載 +1点（49社データ継続率2.46倍差・簡易版）
+        if check_s9_president_message_health(page_text):
+            score += 1
+            reasons.append("+1 S9:社長メッセージ健康記載")
+            s9_president_health = True
+
+        # S10: 儲かっている業界 +1/+3点（49社データ継続率3.27倍差・2段階判定）
+        s10_pts, s10_hits = check_s10_profitable_industry(
+            text=page_text,
+            industry_text=industry,
+            company_info=company_info,
+        )
+        if s10_pts > 0:
+            score += s10_pts
+            hit_label = s10_hits[0] if s10_hits else ""
+            reasons.append(f"+{s10_pts} S10:儲かる業界({hit_label})")
+            s10_profitable = True
+
+    # ===== 相互作用ボーナス（3点セット or 5シグナル以上 → +3点）=====
+    base = extra_signals or {}
+    signals = {
+        "s1_pr":               base.get("s1_pr", False),
+        "s2_kenko_media":      base.get("s2_kenko_media", False),
+        "s3_welfare":          s3_welfare,
+        "s4_kenko_keiei":      s4_kenko_keiei,
+        "s5_renewal":          base.get("s5_renewal", False),
+        "s6_jisha_bldg":       base.get("s6_jisha_bldg", False),
+        "s7_iso":              s7_iso,
+        "s8_sdgs":             s8_sdgs,
+        "s9_president_health": s9_president_health,
+        "s10_profitable":      s10_profitable,
+    }
+    bonus, bonus_reason = check_interaction_bonus(signals)
+    if bonus > 0:
+        score += bonus
+        reasons.append(f"+{bonus} 相互作用ボーナス({bonus_reason})")
 
     return score, reasons
 
@@ -840,16 +1090,24 @@ def evaluate_rank_v2(
         }
 
     # ===== 加点 - 減点で総合スコア =====
-    useful_score, useful_reasons = evaluate_useful_conditions(company_info, page_text)
+    # evaluate_rank で判定した S1/S2/S5/S6 を相互作用ボーナス計算に渡す
+    old_signals = existing_result.get("signals", {})
+    extra_sigs = {
+        "s1_pr":          old_signals.get("S1", False),
+        "s2_kenko_media": old_signals.get("S2", False),
+        "s5_renewal":     old_signals.get("S5", False),
+        "s6_jisha_bldg":  old_signals.get("S6", False),
+    }
+    useful_score, useful_reasons = evaluate_useful_conditions(company_info, page_text, extra_signals=extra_sigs)
     negative_score, negative_reasons = evaluate_negative_conditions(company_info, page_text)
     total_score = useful_score + negative_score
 
-    # ===== ランク決定（Phase 2の閾値） =====
-    if total_score >= 5:
+    # ===== ランク決定（Phase 5閾値: A≥8, B=5-7, C=1-4, NG≤0） =====
+    if total_score >= 8:
         rank = "A"
-    elif total_score >= 2:
+    elif total_score >= 5:
         rank = "B"
-    elif total_score >= 0:
+    elif total_score >= 1:
         rank = "C"
     else:
         rank = "NG"

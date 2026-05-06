@@ -98,23 +98,21 @@ class TestPhase1MustConditions(unittest.TestCase):
         ok, reason = check_phase1_must_conditions(company_info, page_text)
         self.assertTrue(ok, f"プライム子会社例外が効いていない: {reason}")
 
-    # 健康経営記載なしNG
+    # Phase 5: 健康経営記載なしは必須条件から削除 → 通過（加点シグナル判定に降格）
     def test_no_kenkokeiei_ng(self):
         company_info = {"company_name": "株式会社サンプル", "employee_count": "50"}
         page_text = "採用情報。福利厚生にマッサージ完備。"  # 健康経営記載なし
         ok, reason = check_phase1_must_conditions(company_info, page_text)
-        self.assertFalse(ok)
-        self.assertEqual(reason, "HP健康経営記載なし")
+        self.assertTrue(ok, f"Phase 5以降は健康経営記載なしでもNGにならない: {reason}")
 
-    # 採用ページなしNG
+    # Phase 5: 採用情報なしは必須条件から削除 → 通過（加点シグナル判定に降格）
     def test_no_recruit_ng(self):
         company_info = {"company_name": "株式会社サンプル", "employee_count": "50"}
         page_text = "健康経営に注力。福利厚生にマッサージ・人間ドック。"  # 採用記載なし
         ok, reason = check_phase1_must_conditions(company_info, page_text)
-        self.assertFalse(ok)
-        self.assertEqual(reason, "HP採用情報なし")
+        self.assertTrue(ok, f"Phase 5以降は採用情報なしでもNGにならない: {reason}")
 
-    # 福利厚生なし・士業以外NG
+    # Phase 5: 福利厚生記載なしは必須条件から削除 → 通過（加点シグナル判定に降格）
     def test_no_welfare_non_special_ng(self):
         company_info = {
             "company_name": "株式会社サンプル",
@@ -123,8 +121,7 @@ class TestPhase1MustConditions(unittest.TestCase):
         }
         page_text = "健康経営に注力。新卒採用・中途採用を実施中。"  # 福利厚生キーワードなし
         ok, reason = check_phase1_must_conditions(company_info, page_text)
-        self.assertFalse(ok)
-        self.assertEqual(reason, "福利厚生記載なし(士業以外)")
+        self.assertTrue(ok, f"Phase 5以降は福利厚生記載なしでもNGにならない: {reason}")
 
     # 士業は福利厚生記載なくてもOK
     def test_law_firm_no_welfare_ok(self):
