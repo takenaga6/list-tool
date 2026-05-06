@@ -10,7 +10,7 @@ import logging
 import requests
 from urllib.parse import urlparse
 from ddgs import DDGS
-from config import MEDIA_NAME_TO_DOMAIN, load_exclude_list_csv
+from config import MEDIA_NAME_TO_DOMAIN, load_exclude_list_csv, count_japanese_chars, JAPANESE_MIN_CHARS_IN_SNIPPET
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,41 @@ def _looks_like_company_url(url: str, title: str, snippet: str) -> bool:
 
     # その他TLDはシグナル2件以上必要
     return signals >= 2
+
+
+# 法人格キーワード（タイトル内にあれば日本企業の可能性大）
+_JP_LEGAL_KEYWORDS = [
+    "株式会社", "有限会社", "合同会社",
+    "一般社団法人", "一般財団法人",
+    "学校法人", "医療法人",
+]
+
+
+def _is_english_site(url: str, title: str, snippet: str) -> bool:
+    """
+    タイトル＋スニペットの日本語文字がゼロかつ法人格なしの場合に True（英語サイトと判定）。
+
+    条件（AND）:
+      1. title + snippet の日本語文字（ひらがな・カタカナ・漢字）が
+         JAPANESE_MIN_CHARS_IN_SNIPPET 未満
+      2. title に法人格（株式会社・有限会社・合同会社等）が含まれない
+
+    .co.jp は日本法人専用ドメインなので常に通過（False を返す）。
+    """
+    from urllib.parse import urlparse as _up
+    if _up(url).netloc.lower().endswith(".co.jp"):
+        return False
+
+    # 条件1: 日本語文字数チェック
+    combined = title + " " + snippet
+    if count_japanese_chars(combined) >= JAPANESE_MIN_CHARS_IN_SNIPPET:
+        return False
+
+    # 条件2: タイトルに法人格キーワードがあれば日本企業の可能性大 → 通過させる
+    if any(kw in title for kw in _JP_LEGAL_KEYWORDS):
+        return False
+
+    return True
 
 
 def detect_media_domain(query: str) -> str:
@@ -335,6 +370,10 @@ def search_google(query: str, tbs: str, num: int = 10) -> list[dict]:
             if not _looks_like_company_url(url, title, snippet):
                 logger.debug(f"企業URL判定NG（シグナル不足）: {url}")
                 _record_rejected_url(url, title, snippet, query, "信号不足")
+                continue
+            if _is_english_site(url, title, snippet):
+                logger.info(f"英語サイト判定（スニペット日本語0・法人格なし）→スキップ: {url}")
+                _record_rejected_url(url, title, snippet, query, "英語サイト")
                 continue
             results.append({
                 "url": url,
