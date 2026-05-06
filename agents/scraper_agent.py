@@ -147,9 +147,9 @@ def check_company_fields(all_text: str) -> tuple[bool, list[str]]:
     Returns:
         (is_company_page, missing_fields_list)
     """
-    # 日本語ページ判定（ひらがな・カタカナが50文字未満 → 海外企業・英語サイト）
-    japanese_chars = len(re.findall(r'[\u3040-\u309F\u30A0-\u30FF]', all_text[:3000]))
-    if japanese_chars < 50:
+    # 日本語ページ判定（ひらがな・カタカナ・漢字が50文字未満 → 海外企業・英語サイト）
+    from config import count_japanese_chars  # DRY: scraper と search_agent で共有
+    if count_japanese_chars(all_text[:3000]) < 50:
         return False, ["日本語ページではない（海外企業・英語サイト）"]
 
     # サービスページ除外（「運営会社」= SaaS・プロダクトサイトの特徴的な表現のみ対象）
