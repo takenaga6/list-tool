@@ -29,6 +29,7 @@ from config import (
     S1_MEDIA_LIST_URLS,
     S2_MEDIA_LIST_URLS,
     S2_SEARCH_BASED_QUERIES,
+    ENABLE_PHASE_5_2,
     MEDIA_LIST_URLS,
     MIN_REGISTER_SIGNALS,
     is_excluded_company,
@@ -1372,29 +1373,32 @@ def run_batch(
                 print_progress(stats, start_time)
 
         # ─── ①.5 Phase 5.2: 検索クエリベースの S2 取得 ─────────────
-        if stats["success"] < target_count and auto_mode and S2_SEARCH_BASED_QUERIES:
-            for s2_media_name, s2_queries in S2_SEARCH_BASED_QUERIES.items():
-                if stats["success"] >= target_count:
-                    break
-                print(f"\n🔎 [Phase 5.2] {s2_media_name}: 検索クエリ逆引き開始...")
-                s2_results = get_companies_from_search_queries(
-                    s2_queries, s2_media_name, max_per_query=20
-                )
-                if not s2_results:
-                    print(f"  → {s2_media_name}: 取得0社")
-                    continue
-                print(f"  → {len(s2_results)}社を処理開始...")
-                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    futures = {
-                        executor.submit(
-                            process_one_company, r, hubspot, combined_results_writer, processed_domains, None
-                        ): r for r in s2_results
-                    }
-                    for future in as_completed(futures):
-                        status = future.result()
-                        if status in stats:
-                            stats[status] += 1
-                print_progress(stats, start_time)
+        if ENABLE_PHASE_5_2:
+            if stats["success"] < target_count and auto_mode and S2_SEARCH_BASED_QUERIES:
+                for s2_media_name, s2_queries in S2_SEARCH_BASED_QUERIES.items():
+                    if stats["success"] >= target_count:
+                        break
+                    print(f"\n🔎 [Phase 5.2] {s2_media_name}: 検索クエリ逆引き開始...")
+                    s2_results = get_companies_from_search_queries(
+                        s2_queries, s2_media_name, max_per_query=20
+                    )
+                    if not s2_results:
+                        print(f"  → {s2_media_name}: 取得0社")
+                        continue
+                    print(f"  → {len(s2_results)}社を処理開始...")
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = {
+                            executor.submit(
+                                process_one_company, r, hubspot, combined_results_writer, processed_domains, None
+                            ): r for r in s2_results
+                        }
+                        for future in as_completed(futures):
+                            status = future.result()
+                            if status in stats:
+                                stats[status] += 1
+                    print_progress(stats, start_time)
+        else:
+            logger.info("[Phase 5.2] フラグ ENABLE_PHASE_5_2=False のためスキップ")
 
         # ─── ② キーワード検索 ─────────────────────────────────────
         if stats["success"] < target_count and query_list:

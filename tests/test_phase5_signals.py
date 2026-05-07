@@ -239,7 +239,8 @@ class TestS10ProfitableIndustry(unittest.TestCase):
             ("コンサルティング会社です", "経営コンサル"),
             ("SaaSプロダクトを提供しています", "SaaS"),
             ("総合商社として活動", "総合商社"),
-            ("保険代理店業務", "保険代理店"),
+            # Phase 6.2A.2: "保険代理店" は PROFITABLE_INDUSTRY_KEYWORDS から削除済み
+            # → test_phase62a_big_company_filter.py で除外を確認
         ]
         for text, industry in cases:
             with self.subTest(industry=industry):

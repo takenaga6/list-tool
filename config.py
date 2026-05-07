@@ -91,6 +91,11 @@ NEWS_SITE_DOMAINS: list[str] = [
     "sciencedirect.com",
 ]
 
+# Phase 6.3: Phase 5.2 の一時無効化フラグ
+# 2026-05-07: voice_report / daido_kenco のクエリが0件取得のため無効化
+# 再有効化: True に変更（クエリ調整後）
+ENABLE_PHASE_5_2: bool = False
+
 # ランク閾値
 RANK_A_EXTRA_SIGNALS = 2   # S1/S2あり + S3〜S6がこの数以上 → A
 RANK_B_MIN_SIGNALS   = 3   # S1/S2なしの場合のB最低ライン（S3〜S6の合計）
@@ -535,10 +540,49 @@ NG_INDUSTRY_KEYWORDS = [
     "マクドナルド", "すき家", "吉野家", "松屋", "サイゼリヤ",
 ]
 
+# Phase 6.2A.3: 大手・外資系企業ドメイン（規模で除外、業種は問わない）
+# 「業種としての保険・金融除外」はしない。規模・上場グループで判断。
+BIG_COMPANY_DOMAINS: list[str] = [
+    # 外資系保険（規模で除外）
+    "axa.co.jp",            # アクサ生命
+    "aig.co.jp",            # AIG
+    "alico.co.jp",          # メットライフ生命
+    "prudential.co.jp",     # プルデンシャル
+    # 大手保険（日本・規模で除外）
+    "ms-ad.com",            # MS&AD
+    "sompo-japan.co.jp",    # 損保ジャパン
+    "tokiomarine.com",      # 東京海上
+    "dai-ichi-life.co.jp",  # 第一生命
+    "meijiyasudalife.co.jp",# 明治安田生命
+    "nissay.co.jp",         # 日本生命
+    "sumitomo-life.co.jp",  # 住友生命
+    "sbilife.co.jp",        # SBI生命保険
+    # 大手金融（規模で除外）
+    "smbc.co.jp",
+    "bk.mufg.jp",
+    "mizuho-fg.co.jp",
+    "nomura.co.jp",
+    "daiwa.jp",
+    "sbigroup.co.jp",
+    # 大手商社・子会社（規模で除外）
+    "sojitz.com",
+    "sojitz-logitech.com",  # 双日ロジテック
+    "mitsui.co.jp",
+    "mitsubishi.com",
+    "sumitomo.co.jp",
+    "marubeni.com",
+    "itochu.co.jp",
+    # 大手住宅・不動産（規模で除外）
+    "polus.co.jp",          # ポラスグループ
+    "tec-tohoku.polus.co.jp",
+]
+
 # 大企業ドメイン（規模が合わないと判断して除外したい代表的なドメイン）
+# BIG_COMPANY_DOMAINS を統合：pre_screen() の既存ロジックがそのまま機能する
 LARGE_COMPANY_DOMAINS = [
     "fanuc.co.jp",
     "rizapgroup.com",
+    *BIG_COMPANY_DOMAINS,
 ]
 
 # 小規模企業ドメイン（規模が小さくて提案価値が低いため除外）
@@ -1142,12 +1186,12 @@ PRESIDENT_HEALTH_KEYWORDS = [
 #       rank_agent.py 側で is_parent_prime_subsidiary 例外を尊重して処理すること
 PROFITABLE_INDUSTRY_KEYWORDS = [
     # ── 金融サービス（高利益率 × 低離職率 × 高年収） ───────────
+    # Phase 6.2A.2: "金融サービス" "証券" を削除（大手保険会社の過剰加点防止）
+    # 中小の保険代理店・地方銀行は他シグナル（HP健康経営・ISO等）で評価する
     "投資", "ファンド", "VC", "ベンチャーキャピタル",
     "アセットマネジメント", "資産運用",
-    "金融サービス", "証券",
     "モーゲージ", "プライベートバンキング",
-    # ── 保険（安定高利益率業界） ────────────────────────────
-    "保険", "保険代理店",
+    # Phase 6.2A.2: "保険" "保険代理店" を削除（大手保険会社の過剰加点防止）
     # ── 法律・士業（高利益率 × 低離職率） ──────────────────
     "法律事務所", "弁護士法人", "税理士法人", "監査法人",
     "士業",
