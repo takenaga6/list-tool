@@ -1440,6 +1440,12 @@ def run_batch(
                 print_progress(stats, start_time)
                 time.sleep(random.uniform(2, 4))
 
+            # Phase 6.7A.2: 目標達成で while を抜けた場合にログ出力
+            if stats["success"] >= target_count:
+                logger.info(
+                    f"[早期終了] 目標{target_count}件達成（{stats['success']}件登録済み）"
+                )
+
     except KeyboardInterrupt:
         print("\n\n⛔ 中断されました")
     finally:

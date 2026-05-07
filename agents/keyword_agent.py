@@ -168,9 +168,45 @@ NG_SKIP_THRESHOLD = 0.9   # NG率90%以上のクエリは末尾に回す
 MIN_RUNS_FOR_NG_CHECK = 3  # 最低3回実行後に判定
 A_RATE_THRESHOLD = 0.05   # A率5%未満かつ5回以上実行済み → 降格
 
+# ===== Phase 6.7B: 履歴ない媒体の初回試行用・主要5都道府県 =====
+PRIORITY_PREFECTURES = ["東京都", "大阪府", "愛知県", "神奈川県", "福岡県"]
+
 # ===== Phase 3.3 学習システム拡張 =====
 STATS_VERSION = "2.0"
 DEFAULT_SOURCE = "search"  # source未指定時のデフォルト
+
+
+def is_dead_query(stats: dict) -> bool:
+    """死んだクエリ（除外すべき）かどうか判定。
+
+    判定基準:
+    - 試行3回以上 かつ ヒット数0 → 死んでいる
+    - 試行5回以上 かつ ヒット率5%未満 → 効率悪すぎ
+    """
+    runs = stats.get("runs", 0)
+    total_hits = stats.get("total_hits", 0)
+    if runs >= 3 and total_hits == 0:
+        return True
+    if runs >= 5 and total_hits / runs < 0.05:
+        return True
+    return False
+
+
+def has_media_hit_history(media: str, stats: dict) -> bool:
+    """指定媒体について、過去にヒット実績があるかを判定。
+
+    Args:
+        media: 媒体名（例: "B-PLUS"）
+        stats: load_stats() の queries 部分
+
+    Returns:
+        True: 過去に1件でもヒットしたクエリがある
+        False: ヒット実績ゼロ（または履歴なし）
+    """
+    for query, query_stats in stats.items():
+        if media in query and query_stats.get("total_hits", 0) > 0:
+            return True
+    return False
 
 
 def generate_all_queries() -> list[str]:
@@ -216,11 +252,19 @@ def generate_all_queries() -> list[str]:
             queries.append(f"{media} {suffix}")
 
     # 9. 地域 × 媒体名（S1-B検索型）
+    # Phase 6.7B: 媒体ごとにヒット履歴を確認し、履歴なしは主要5都道府県のみ生成
     try:
         from config import SEARCH_REGIONS
+        _stats_for_media = load_stats().get("queries", {})
         for media in PR_MEDIA:
-            for region in SEARCH_REGIONS:
-                queries.append(f"{media} {region} 株式会社")
+            if has_media_hit_history(media, _stats_for_media):
+                # ヒット実績あり → 全47都道府県
+                for region in SEARCH_REGIONS:
+                    queries.append(f"{media} {region} 株式会社")
+            else:
+                # 履歴なし → 主要5都道府県のみ（初回試行コスト削減）
+                for region in PRIORITY_PREFECTURES:
+                    queries.append(f"{media} {region} 株式会社")
     except ImportError:
         pass
 
@@ -425,7 +469,11 @@ def record_rank_result(query: str, rank: str, source: str = None):
     save_stats(stats)
 
 
-def get_sorted_queries(custom_queries: list[str] = None, worker_offset: int = 0) -> list[str]:
+def get_sorted_queries(
+    custom_queries: list[str] = None,
+    worker_offset: int = 0,
+    exclude_dead: bool = True,
+) -> list[str]:
     """
     A/Bランク発見率が高い順に並び替えたクエリリストを返す。
 
@@ -435,6 +483,11 @@ def get_sorted_queries(custom_queries: list[str] = None, worker_offset: int = 0)
       グループ2: AB率実績あり（高い順）
       グループ3: 未実績クエリ（生成順を維持）
       グループ4: NG率が高い低品質クエリ（末尾）
+
+    exclude_dead:
+      True（デフォルト）: 死んだクエリ（runs>=3でhits=0等）を除外する。
+      False: 全クエリを返す（後方互換・デバッグ用）。
+      カスタムクエリは exclude_dead=True でも除外されない。
 
     worker_offset:
       複数人が同時に使う場合、各グループ内の順番をワーカーごとにシャッフルする。
@@ -454,6 +507,23 @@ def get_sorted_queries(custom_queries: list[str] = None, worker_offset: int = 0)
     stats_v2 = load_stats()
     stats = stats_v2.get("queries", {})  # v2形式から queries 部分を取り出す
     custom_set = set(custom_queries or [])
+
+    # Phase 6.7A: 死んだクエリを除外（カスタムクエリは対象外）
+    if exclude_dead:
+        filtered = []
+        excluded_count = 0
+        for q in all_queries:
+            if q in custom_set:
+                filtered.append(q)
+            elif not is_dead_query(stats.get(q, {})):
+                filtered.append(q)
+            else:
+                excluded_count += 1
+        all_queries = filtered
+        if excluded_count > 0:
+            logger.info(
+                f"[Phase 6.7A] 死んだクエリを{excluded_count}件除外（残り{len(all_queries)}件）"
+            )
 
     def sort_key(q):
         if q in custom_set:
