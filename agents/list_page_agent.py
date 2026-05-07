@@ -21,6 +21,8 @@ from urllib.parse import urlparse, urljoin
 
 from bs4 import BeautifulSoup
 
+from agents.scraper_agent import _clean_company_name
+
 logger = logging.getLogger(__name__)
 
 HEADERS = {
@@ -36,6 +38,13 @@ COMPANY_NAME_PATTERNS = [
     r"((?:株式会社|合同会社|有限会社|一般社団法人|NPO法人)[^\s「」【】（）()\n\r<、。,]{1,30})",
     r"([^\s「」【】（）()\n\r<、。,]{1,30}(?:株式会社|合同会社|有限会社))",
 ]
+
+
+def _safe_add(names: set, raw: str) -> None:
+    """企業名をクリーンアップして追加。空文字になったら無視。"""
+    cleaned = _clean_company_name(raw.strip()[:40])
+    if cleaned:
+        names.add(cleaned)
 
 # ファイルリンク拡張子
 FILE_EXTENSIONS = {
@@ -150,7 +159,7 @@ def extract_company_names_from_text(text: str) -> list[str]:
                     if name in ("株式会社", "合同会社", "有限会社",
                                 "一般社団法人", "NPO法人"):
                         continue
-                    names.add(name)
+                    _safe_add(names, name)
     return sorted(names)
 
 
@@ -167,7 +176,7 @@ def extract_company_names_from_html(soup: BeautifulSoup) -> list[str]:
                 if m:
                     name = m.group(1).strip()
                     if 3 <= len(name) <= 40:
-                        names.add(name)
+                        _safe_add(names, name)
 
     # リスト（ul/ol/li）から抽出
     for li in soup.find_all("li"):
@@ -177,7 +186,7 @@ def extract_company_names_from_html(soup: BeautifulSoup) -> list[str]:
             if m:
                 name = m.group(1).strip()
                 if 3 <= len(name) <= 40:
-                    names.add(name)
+                    _safe_add(names, name)
 
     # 全テキストからも抽出（上記で漏れたもの補完）
     full_text = soup.get_text(separator="\n", strip=True)
@@ -405,7 +414,7 @@ def _scrape_voice_report(base_url: str, max_pages: int = 10) -> list[str]:
                 if m:
                     name = m.group(1).strip()
                     if 3 <= len(name) <= 40:
-                        names.add(name)
+                        _safe_add(names, name)
 
         # ページ内全テキストからも補完
         full_names = extract_company_names_from_text(soup.get_text(separator="\n"))
@@ -486,7 +495,7 @@ def _scrape_kenkoukeiei_media(base_url: str, max_pages: int = 30) -> list[str]:
                 if m:
                     name = m.group(1).strip()
                     if 3 <= len(name) <= 40:
-                        names.add(name)
+                        _safe_add(names, name)
 
         # ページ全体テキストからも補完
         names.update(extract_company_names_from_text(soup.get_text(separator="\n")))
@@ -532,7 +541,7 @@ def _scrape_daido_award(base_url: str, max_pages: int = 20) -> list[str]:
                 if m:
                     name = m.group(1).strip()
                     if 3 <= len(name) <= 40:
-                        names.add(name)
+                        _safe_add(names, name)
 
         # アンカーテキストからも抽出
         for a in soup.find_all("a", href=True):
@@ -542,7 +551,7 @@ def _scrape_daido_award(base_url: str, max_pages: int = 20) -> list[str]:
                 if m:
                     name = m.group(1).strip()
                     if 3 <= len(name) <= 40:
-                        names.add(name)
+                        _safe_add(names, name)
 
         # ページ全体テキストからも補完
         names.update(extract_company_names_from_text(soup.get_text(separator="\n")))
