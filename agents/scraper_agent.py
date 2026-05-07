@@ -46,6 +46,35 @@ SUB_PAGE_PATHS = [
 _NAME_CONJUNCTION = re.compile(r"及び|および")
 # 「ほか」「など」が末尾に付く場合は後ろを切り捨て、コアを残す
 _NAME_SUFFIX_NOISE = re.compile(r"[　\s]*(?:ほか|など)[^\n。]*$")
+# 先頭の接続詞ノイズ（「ほかXX株式会社」など、リストページの連続企業名から誤抽出）
+_NAME_PREFIX_NOISE = re.compile(
+    r"^[　\s]*(?:ほか|また|および|及び|さらに|並びに)[　\s]*"
+)
+# 先頭の半角/全角数字（1〜2桁）+ 直後が日本語/英字（番号付きリストの断片を除去）
+_NAME_PREFIX_DIGIT = re.compile(
+    r"^[0-9０-９]{1,2}(?=[ぁ-んァ-ヶー一-龥a-zA-Z])"
+)
+# 助詞セット（説明文判定用）
+_PARTICLES = frozenset(["の", "が", "を", "に", "な", "は", "と", "で", "へ"])
+
+
+def _is_descriptive_text(name: str) -> bool:
+    """
+    会社名ではなく説明文・キャッチコピーを判定する。
+
+    法人格（株式会社等）より前のテキスト（prefix）を検査:
+      - 助詞が2種類以上含まれる → 文章の可能性が高い
+      - prefix が「社」「会社」で終わる → 「修理会社株式会社」のような重複
+    """
+    for legal in ["株式会社", "合同会社", "有限会社"]:
+        if legal in name:
+            prefix = name.split(legal)[0]
+            particle_count = sum(1 for p in _PARTICLES if p in prefix)
+            if particle_count >= 2:
+                return True
+            if prefix.endswith(("社", "会社")):
+                return True
+    return False
 
 
 def _clean_company_name(name: str) -> str:
@@ -53,16 +82,29 @@ def _clean_company_name(name: str) -> str:
     会社名に混入するノイズ表現を除去または除外する。
 
     - 「及び」「および」を含む → 複数企業の並列表記の可能性が高い → 空文字（除外）
+    - 先頭の「ほか/また」等接続詞 → 除去してコアを残す
+    - 先頭の1〜2桁数字（番号付きリスト断片） → 除去
     - 末尾の「ほか〜」「など〜」→ サフィックスを切り捨てた上でコアを返す
+    - 助詞2種以上 or 法人格直前が「会社」で終わる → 説明文と判定し除外
 
     空文字を返した場合は呼び出し元で除外すること。
     """
+    if not name:
+        return ""
     if _NAME_CONJUNCTION.search(name):
         logger.debug(f"会社名除外（接続詞含む）: {name}")
         return ""
+    # 先頭ノイズ除去
+    name = _NAME_PREFIX_NOISE.sub("", name)
+    name = _NAME_PREFIX_DIGIT.sub("", name)
+    # 末尾ノイズ除去
     cleaned = _NAME_SUFFIX_NOISE.sub("", name).strip()
-    if cleaned != name:
+    if cleaned != name.strip():
         logger.debug(f"会社名ノイズ除去: {name!r} → {cleaned!r}")
+    # 説明文判定
+    if _is_descriptive_text(cleaned):
+        logger.debug(f"会社名除外（説明文）: {cleaned}")
+        return ""
     return cleaned
 
 
@@ -491,18 +533,48 @@ def extract_company_url_from_media_page(media_url: str) -> tuple[str, str]:
     return "", ""
 
 
+_TITLE_SEPARATORS = ["|", "｜", " - ", "–", "—", "　"]
+_TITLE_LEGAL_KWS  = ["株式会社", "合同会社", "有限会社", "一般社団法人"]
+
+
 def extract_company_name(soup: BeautifulSoup, text: str) -> str:
     if soup:
         title_tag = soup.find("title")
         if title_tag:
             title_text = title_tag.get_text(strip=True)
-            for sep in ["|", "｜", " - ", "–", "—", "　"]:
+
+            # 全セパレータで分割して法人格を含む最短パーツを選ぶ
+            # （「最初のセパレータで即return」バグ: title全体が1パーツになり
+            #   「ホーム - 株式会社XX」のようなタイトルをそのまま返していた）
+            best: str | None = None
+            for sep in _TITLE_SEPARATORS:
                 for part in title_text.split(sep):
                     part = part.strip()
-                    if any(kw in part for kw in ["株式会社", "合同会社", "有限会社", "一般社団法人"]):
-                        cleaned = _clean_company_name(part[:40])
-                        if cleaned:
-                            return cleaned
+                    if any(kw in part for kw in _TITLE_LEGAL_KWS):
+                        if best is None or len(part) < len(best):
+                            best = part
+
+            # 最短候補をさらにセパレータで絞り込む（複数セパレータが混在するケース）
+            # 例: "Home - 株式会社XX｜サービス名" → ｜で割った後に - でも割る
+            if best is not None:
+                changed = True
+                while changed:
+                    changed = False
+                    for s in _TITLE_SEPARATORS:
+                        for p in best.split(s):
+                            p = p.strip()
+                            if any(kw in p for kw in _TITLE_LEGAL_KWS) and 0 < len(p) < len(best):
+                                best = p
+                                changed = True
+                                break
+                        if changed:
+                            break
+
+            if best:
+                cleaned = _clean_company_name(best[:40])
+                if cleaned:
+                    return cleaned
+
         og = soup.find("meta", property="og:site_name")
         if og and og.get("content"):
             cleaned = _clean_company_name(og["content"].strip()[:40])
