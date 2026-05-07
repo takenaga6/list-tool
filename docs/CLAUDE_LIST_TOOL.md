@@ -91,57 +91,69 @@ list_tool/
 ```
 
 ---
-
-## ⚡ 現在の状態（2026-05-06 時点）
+## ⚡ 現在の状態（2026-05-07 時点）
 
 ### ブランチ
+作業ブランチ: main（全フェーズマージ済み）
+最新コミット（時系列）:
 
-```
-作業ブランチ: feature/phase5-relax-must-conditions
-   - Phase 5 全ステップ（Step 1〜8）実装済
-   - Step 9: ドキュメント更新（現在）
-   - Step 10: push + PR + マージ + Render反映（次のアクション）
+6da9282 Phase 6.1.5: list_page_agent に _safe_add 導入
+44be0fc Phase 6.7:   学習機構の整理と早期打ち切り
+bad5d69 Phase 6.2B:  NG業種リストに直接競合・整体院系を追加
+54c7de6 Phase 6.2A + 6.3: 大手ドメイン除外・S10保険削除・Phase5.2無効化
+6a78284 Phase 6.1:   企業名抽出バグ修正
 
-最新コミット:
-- 4c7d3dc Phase 5 Step 8: tests/test_phase5_signals.py 追加（25テスト・119件PASS）
-- 28677cf Phase 5 Step 6: evaluate_useful_conditions に S7/S8/S9/S10 + 相互作用ボーナスを統合
-- af1bcfb Phase 5 Step 5: check_interaction_bonus 関数を rank_agent.py に追加
-- be477d5 Phase 5 Step 4: S7/S8/S9/S10 の加点判定関数を rank_agent.py に追加
-- 0dbb9be Phase 5 Step 3: S7/S8/S9/S10 キーワード定義を config.py に追加
-- 99570e1 Phase 5 Step 2: Phase 1必須条件③④⑤を削除
 
-main 最新コミット: 58a2d1d（Phase 4 PR #6 マージ済）
-```
-
-### Phase 5 の状態
-
-```
-✅ Step 1: 49社シミュレーション（scripts/phase5_simulation.py）
-✅ Step 2: Phase 1必須条件③④⑤削除（健康経営記載/採用情報/福利厚生 → 加点に降格）
-✅ Step 3: S7/S8/S9/S10 キーワード定義（config.py）
-✅ Step 4: 加点判定関数追加（rank_agent.py）
-✅ Step 5: check_interaction_bonus 関数追加
-✅ Step 6: evaluate_useful_conditions に統合（+ evaluate_rank_v2 閾値更新）
-✅ Step 7: ランク閾値確定（A:8点以上 / B:5-7点 / C:1-4点 / NG:0点以下）
-✅ Step 8: テスト追加（25テスト追加・119件全PASS）
-🔄 Step 9: ドキュメント更新（現在）
-⏸ Step 10: push + PR + マージ + Render反映（次のアクション）
-```
+### Phase 6 シリーズの状態（2026-05-07 完了）
+✅ Phase 6.1     企業名抽出バグ修正（HTMLタイトル系）
+✅ Phase 6.1.5   list_page_agent.py 修正（テキスト本文系・緊急）
+✅ Phase 6.2A    大手・上場企業のドメイン除外
+✅ Phase 6.2B    NG業種に直接競合追加
+✅ Phase 6.3     Phase 5.2 一時無効化
+✅ Phase 6.7     学習機構の整理と早期打ち切り
+詳細は docs/PHASE_HISTORY.md と docs/DECISION_LOG.md 参照。
 
 ### テスト
+全テスト 255件 PASS
 
-```
-全テスト 119件 PASS
-- Phase 5 で 94→119 件に増加（+25件）
-- 新規追加: tests/test_phase5_signals.py（25件）
-  - TestPhase1Relaxation（5件）: ③④⑤削除の確認
-  - TestS7IsoCert（2件）/ TestS8Sdgs（2件）
-  - TestS9PresidentHealth（4件）/ TestS10ProfitableIndustry（4件）
-  - TestInteractionBonus（6件）
-  - その他（2件）
-```
+Phase 5 で 119件 → Phase 6 系で 255件まで増加
+Phase 6 系で 161件追加（94→255）
 
----
+
+### 5/7 リストアップ検証結果
+朝のリストアップ: 3件登録（全て正常な中小企業・誤登録なし）
+
+株式会社日米商会ホームページ（B 5点）
+株式会社吉光組（B 5点）
+シオヤユニテック株式会社（B 5点）
+
+効果確認:
+
+Phase 6.1.5: 「ほか〜」混入ゼロ
+Phase 6.2A: 不動テトラ・レーザーテックが上場判定で除外
+Phase 6.2B: 新潮社が出版社NG業種で除外
+Phase 6.7: クエリ数 2803→1291（54%削減）
+
+
+### 致命的問題（Phase 7 で対応予定）
+登録ペースが事業として成立しない:
+
+朝131分で1件登録、午後41分で0件登録
+速度: 0件/時
+
+根本原因:
+
+メディアベースのクエリ戦略では、中小ターゲット企業を効率よく発見できない
+Phase 6 系の修正では解決しない、戦略レベルの問題
+
+→ Phase 7 として「メディアベース → 業種＋地域ベース」への転換を検討
+
+### 完了基準（事業として）
+A. 1日10件以上のA/Bランク企業を自動登録できる   → 未達成
+B. 誤登録（大手・PR記事）が10%以下              → 達成見込み
+C. インターンが営業リストとしてそのまま使える   → 「ほか〜」解消で達成
+
+
 
 ## ✅ Phase 5 設計判断（2026-05-06 完了）
 
@@ -306,24 +318,37 @@ D. Phase 1必須条件「健康経営記載」が厳しすぎる
 
 ### 最優先（次回セッション開始直後）
 
-```
-1. このファイルを読む
-2. CLAUDE.md（個人OS）を読む
-3. docs/DECISION_LOG.md を読む
-4. git status で現在のブランチ確認
-5. 何をやろうとしているかユーザーに確認
-```
+このファイルを読む
+CLAUDE.md（個人OS）を読む
+docs/DECISION_LOG.md を読む（特に Phase 6 系の判断）
+docs/PHASE_HISTORY.md を読む（特に Phase 6 系セクション）
+git status で現在のブランチ確認
+何をやろうとしているかユーザーに確認
 
-### 残作業（Phase 5 Step 10）
 
-```
-feature/phase5-relax-must-conditions の push + PR + マージ + Render反映
-PRタイトル: "Phase 5: Phase 1必須条件緩和 + 加点シグナル拡充（S7-S10 + 相互作用ボーナス）"
-マージ後、本番でリストアップ実行して登録件数確認
-```
+### 次に取り組むべきフェーズ
 
----
+**Phase 7（最優先）：クエリ戦略の根本見直し**
 
+目的：登録ペースを上げる（現在0件/時を改善）
+
+検討すべき選択肢：
+- A案: 経済産業省 XLSX（21,369社）を母集団にして、各企業のHPを直接 health/SDGs キーワードで判定
+- B案: 健康経営優良法人2026公式リスト（ACTION！＋）の認定企業を直接スクレイピング
+- C案: 業種×地域の絞り込み戦略（地方・中小・成長業種）
+
+工数: 1〜2日
+事業判断が大きいため、ユーザーと相談しながら決める。
+
+### 残課題リスト（優先順位順）
+優先度  タスク                                     工数        推奨タイミング
+高      Phase 7: クエリ戦略の根本見直し            1〜2日      最優先
+中      Phase 6.5: 検索エンジンレート制限対策      半日        Phase 7 後
+中      Phase 6.7C: has_media_hit_history 閾値見直 30分        Phase 7 と同時可
+中      Phase 6.4: PARENT_PRIME_KEYWORDS 見直し    1〜2時間    Phase 7 後
+低      Phase 6.6: voice-report SPA 対応           半日        後回し
+低      ローカル⇔Render 学習データ双方向同期       未定        後回し
+低      approach_list.csv.csv のリネーム            1分         後回し
 ## ⚠️ Claude が陥りがちな失敗パターン
 
 ### 過去の失敗（2026-04-30 セッションで発生）
