@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
 from utils.prefecture_resolver import extract_prefecture_with_voting
 from utils.legal_form import has_legal_form, LEGAL_FORMS
+from utils.company_name_validator import _is_valid_company_name
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +117,14 @@ def _truncate_at_separator(name: str) -> str:
 
 
 def _dedupe_consecutive(name: str) -> str:
-    """A│A 等の完全重複パターンを正規化する（_truncate_at_separator の補完）。"""
-    m = re.match(r"^(.+?)[|｜│―–—]\1$", name.strip())
+    """A│A / A A 等の完全重複パターンを正規化する（_truncate_at_separator の補完）。"""
+    n = name.strip()
+    # セパレータ区切り重複（既存）
+    m = re.match(r"^(.+?)[|｜│―–—]\1$", n)
+    if m:
+        return m.group(1).strip()
+    # スペース区切り重複（半角・全角・混在）
+    m = re.match(r"^(.+?)[ 　]+\1$", n)
     if m:
         return m.group(1).strip()
     return name
@@ -159,6 +166,10 @@ def _clean_company_name(name: str) -> str:
     # 説明文判定
     if _is_descriptive_text(cleaned):
         logger.debug(f"会社名除外（説明文）: {cleaned}")
+        return ""
+    # 有効性判定（C2: 句読点・法人格位置・助詞4個以上）
+    if not _is_valid_company_name(cleaned):
+        logger.debug(f"会社名除外（有効性NG）: {cleaned}")
         return ""
     return cleaned
 
