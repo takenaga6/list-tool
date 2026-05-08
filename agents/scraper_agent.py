@@ -57,6 +57,17 @@ _NAME_PREFIX_DIGIT = re.compile(
 )
 # 助詞セット（説明文判定用）
 _PARTICLES = frozenset(["の", "が", "を", "に", "な", "は", "と", "で", "へ"])
+# 末尾ノイズ語（HPタイトルに付く「ホームページ」等、社名末尾からのみ除去）
+_NAME_SUFFIX_SITE = re.compile(
+    r"(?:トップページ|ホームページ|[Ww][Ee][Bb]サイト|公式(?:サイト|HP|ホームページ))\s*$"
+)
+# セパレータ（注釈・地名・業種を区切る文字）
+# ハイフン単体（A-B商事）は保護。スペース付きハイフン ` - ` のみ対象。
+_NAME_SEP_CHARS = re.compile(
+    r"[ 　]*[｜│―–—][ 　]*"
+    r"|[ 　]+\|[ 　]+"
+    r"|[ 　]+-[ 　]+"
+)
 
 
 def _is_descriptive_text(name: str) -> bool:
@@ -78,10 +89,32 @@ def _is_descriptive_text(name: str) -> bool:
     return False
 
 
+def _remove_noise_phrases(name: str) -> str:
+    """末尾の「ホームページ」「WEBサイト」等ノイズ語を除去する。"""
+    return _NAME_SUFFIX_SITE.sub("", name).strip()
+
+
+def _truncate_at_separator(name: str) -> str:
+    """｜│―–—等のセパレータ以降（地名・業種注釈）を切り捨て先頭部分を返す。"""
+    parts = _NAME_SEP_CHARS.split(name, maxsplit=1)
+    return parts[0].strip()
+
+
+def _dedupe_consecutive(name: str) -> str:
+    """A│A 等の完全重複パターンを正規化する（_truncate_at_separator の補完）。"""
+    m = re.match(r"^(.+?)[|｜│―–—]\1$", name.strip())
+    if m:
+        return m.group(1).strip()
+    return name
+
+
 def _clean_company_name(name: str) -> str:
     """
     会社名に混入するノイズ表現を除去または除外する。
 
+    - 末尾の「ホームページ/トップページ/WEBサイト」等を除去
+    - 「｜│―–—」等のセパレータ以降（地名・業種注釈）を切り捨て
+    - 「A│A」等の同一文字列連続を除去
     - 「及び」「および」を含む → 複数企業の並列表記の可能性が高い → 空文字（除外）
     - 先頭の「ほか/また」等接続詞 → 除去してコアを残す
     - 先頭の1〜2桁数字（番号付きリスト断片） → 除去
@@ -90,6 +123,12 @@ def _clean_company_name(name: str) -> str:
 
     空文字を返した場合は呼び出し元で除外すること。
     """
+    if not name:
+        return ""
+    # 末尾ノイズ語 → セパレータ切り捨て → 同一連続除去
+    name = _remove_noise_phrases(name)
+    name = _truncate_at_separator(name)
+    name = _dedupe_consecutive(name)
     if not name:
         return ""
     if _NAME_CONJUNCTION.search(name):
@@ -534,7 +573,7 @@ def extract_company_url_from_media_page(media_url: str) -> tuple[str, str]:
     return "", ""
 
 
-_TITLE_SEPARATORS = ["|", "｜", " - ", "–", "—", "　"]
+_TITLE_SEPARATORS = ["|", "｜", "│", " - ", "–", "—", "　"]
 _TITLE_LEGAL_KWS  = ["株式会社", "合同会社", "有限会社", "一般社団法人"]
 
 
