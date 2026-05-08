@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -39,6 +40,7 @@ OUT_LOG_CSV   = os.path.join(ROOT, "output", "repair_apply_log.csv")
 _SKIP_IDS: set[str] = {"321669733093"}
 
 _LOG_FIELDS = [
+    "実行日時",
     "hubspot_id", "会社名_元", "会社名_新",
     "都道府県_元", "都道府県_新",
     "所在地_元", "所在地_新",
@@ -140,14 +142,35 @@ def build_patch_props(row: dict) -> dict:
     return props
 
 
-# ── ログ書き込み ──────────────────────────────────────────────────────────────
+# ── ログ書き込み（即書き込み方式）────────────────────────────────────────────
 
-def write_log(log_rows: list[dict]) -> None:
-    with open(OUT_LOG_CSV, "w", encoding="utf-8-sig", newline="") as f:
+def init_log_file() -> None:
+    """ログファイルが存在しない場合のみヘッダー行を書き込む。"""
+    if not os.path.exists(OUT_LOG_CSV):
+        with open(OUT_LOG_CSV, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=_LOG_FIELDS, extrasaction="ignore")
+            writer.writeheader()
+        logger.info(f"ログファイル作成: {OUT_LOG_CSV}")
+
+
+def append_log_row(row: dict, result: str, status: int | None, note: str) -> None:
+    """PATCH 結果を1行ずつ追記モードで書き込む。"""
+    log_row = {
+        "実行日時":      datetime.now().isoformat(timespec="seconds"),
+        "hubspot_id":   row.get("hubspot_id", ""),
+        "会社名_元":     row.get("会社名_元", ""),
+        "会社名_新":     row.get("会社名_新", ""),
+        "都道府県_元":   row.get("都道府県_元", ""),
+        "都道府県_新":   row.get("都道府県_新", ""),
+        "所在地_元":     row.get("所在地_元", ""),
+        "所在地_新":     row.get("所在地_新", ""),
+        "適用結果":      result,
+        "HTTPステータス": str(status) if status is not None else "",
+        "備考":          note,
+    }
+    with open(OUT_LOG_CSV, "a", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=_LOG_FIELDS, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(log_rows)
-    logger.info(f"ログ出力: {OUT_LOG_CSV}")
+        writer.writerow(log_row)
 
 
 # ── メイン ────────────────────────────────────────────────────────────────────
@@ -204,8 +227,10 @@ def main() -> None:
 
     print()
 
-    # 5. 順次 PATCH
-    log_rows: list[dict] = []
+    # 5. ログファイル初期化（ヘッダー書き込み、ファイル新規作成時のみ）
+    init_log_file()
+
+    # 6. 順次 PATCH（1件ごとに即書き込み）
     ok_count    = 0
     skip_count  = 0
     error_count = 0
@@ -217,50 +242,43 @@ def main() -> None:
         if not props:
             # 差分なし（安全策: 変更フラグTrueなのに差分ゼロは想定外だが念のため）
             logger.warning(f"  [{hub_id}] 差分プロパティが0件、スキップ")
-            log_rows.append({
-                **row,
-                "適用結果":    "スキップ",
-                "HTTPステータス": "",
-                "備考":        "差分プロパティなし（想定外）",
-            })
+            append_log_row(row, result="skipped", status=None, note="差分プロパティなし（想定外）")
             skip_count += 1
             continue
 
-        logger.info(
-            f"[{i}/{len(targets)}] PATCH {hub_id}: {list(props.keys())}"
-        )
+        logger.info(f"[{i}/{len(targets)}] PATCH {hub_id}: {list(props.keys())}")
 
-        status, err = _patch_company(token, hub_id, props)
+        try:
+            status, err = _patch_company(token, hub_id, props)
+        except Exception as e:
+            # _patch_company が想定外の例外を投げた場合（基本的にはありえないが安全策）
+            note = f"予期せぬ例外: {e}"
+            logger.error(f"  [{hub_id}] {note}")
+            append_log_row(row, result="exception", status=None, note=note)
+            error_count += 1
+            raise
 
         if err == "" and status and 200 <= status < 300:
             result = "OK"
             ok_count += 1
             logger.info(f"  → 成功 {status}")
         else:
-            result = "エラー"
+            result = "failed"
             error_count += 1
             logger.error(f"  → 失敗 status={status} : {err}")
 
-        log_rows.append({
-            **row,
-            "適用結果":    result,
-            "HTTPステータス": str(status) if status else "",
-            "備考":        err,
-        })
+        append_log_row(row, result=result, status=status, note=err)
 
         # レート制限対策: 0.2秒スリープ（最後のレコード以外）
         if i < len(targets):
             time.sleep(0.2)
 
-    # 6. ログ出力
-    write_log(log_rows)
-
     # 7. サマリー表示
     print("\n── 適用完了 ────────────────────────────────────────")
-    print(f"  成功 : {ok_count} 件")
-    print(f"  エラー: {error_count} 件")
+    print(f"  成功    : {ok_count} 件")
+    print(f"  失敗    : {error_count} 件")
     print(f"  スキップ: {skip_count} 件")
-    print(f"  ログ : {OUT_LOG_CSV}")
+    print(f"  ログ    : {OUT_LOG_CSV}")
     print("────────────────────────────────────────────────────\n")
 
     if error_count > 0:
