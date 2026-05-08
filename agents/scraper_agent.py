@@ -907,6 +907,10 @@ def scrape_company_info(
                 _zip_minimal, info.get("phone", ""), text, url=target_url
             )
             info["_page_text"] = text
+        logger.info(
+            f"[FUNNEL] scrape_success_minimal: {target_url} "
+            f"→ {info['company_name']} ({info['employee_count']}名)"
+        )
         return info
     # ─────────────────────────────────────────────────────────
 
@@ -998,5 +1002,9 @@ def scrape_company_info(
         f"| 代表:{bool(info['representative'])} TEL:{bool(info['phone'])} "
         f"| 住所:{bool(info['address'])} 従業員:{info['employee_count']} "
         f"| 信頼度:{info.get('_confidence', 0)}/4"
+    )
+    logger.info(
+        f"[FUNNEL] scrape_success: {target_url} "
+        f"→ {info['company_name']} ({info['employee_count']}名)"
     )
     return info

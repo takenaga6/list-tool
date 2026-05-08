@@ -521,6 +521,7 @@ def process_one_company(
             title = search_result.get("title", url)[:30]
             print(f"  ✂ スクリーナーNG [{screen_reason}]: {title}")
             logger.debug(f"[LEARNING] record_ng(スクリーナーNG): query={search_result['search_query']!r}")
+            logger.info(f"[FUNNEL] screener_ng [{screen_reason}]: {url}")
             record_ng(search_result["search_query"])
             return "ng"
 
@@ -565,6 +566,7 @@ def process_one_company(
             _ng_reason = rank_result.get("ng_reason", "")
             print(f"  ⛔ NGスキップ: {_ng_name or company_domain} [{_ng_reason}]")
             logger.debug(f"[LEARNING] record_ng(ランクNG): query={search_result['search_query']!r}")
+            logger.info(f"[FUNNEL] rank_ng [{_ng_reason}]: {_ng_name or company_domain}")
             record_ng(search_result["search_query"])  # NGをクエリ学習に反映
             add_to_excluded_companies(_ng_name, f"NG: {_ng_reason}")
             # Phase 1必須条件NGの場合、理由をcompany_infoに記録（後続のHubSpot書込用）
@@ -655,6 +657,7 @@ def process_one_company(
                 f"自動スキップ（スコア{score}点 / 信頼度{confidence} / フィールド:{has_min_fields}）: "
                 f"{_low_name or company_domain}"
             )
+            logger.info(f"[FUNNEL] low_score [score={score}]: {_low_name or company_domain}")
             record_ng(search_result["search_query"])
             add_to_excluded_companies(_low_name, f"スコア不足（{score}点）")
             return "ng"
@@ -690,6 +693,7 @@ def process_one_company(
                     "検索クエリ": search_result.get("search_query", ""),
                 })
                 logger.info(f"[LEARNING] record_rank_result: rank={rank_result['rank']}, query={search_result['search_query']!r}")
+                logger.info(f"[FUNNEL] registered [{rank_result['rank']}/{score}点]: {company_info['company_name']}")
                 record_rank_result(search_result["search_query"], rank_result["rank"])
                 return "success"
 
@@ -705,6 +709,7 @@ def process_one_company(
                 f"{company_info.get('company_name') or company_domain}"
             )
             record_rank_result(search_result["search_query"], rank_result["rank"])
+            logger.info(f"[FUNNEL] pending [{rank_result['rank']}/{score}点]: {company_info.get('company_name') or company_domain}")
             return "pending"  # 承認前はpending（successと区別）
 
         # 自動登録モード
@@ -742,6 +747,7 @@ def process_one_company(
                 "検索クエリ": search_result.get("search_query", ""),
             })
             record_rank_result(search_result["search_query"], rank)
+            logger.info(f"[FUNNEL] registered [{rank}/{score}点]: {company_info.get('company_name') or company_domain}")
 
             found_files = company_info.get("found_file_links", [])
             if found_files:
