@@ -10,6 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
 from utils.prefecture_resolver import extract_prefecture_with_voting
+from utils.legal_form import has_legal_form, LEGAL_FORMS
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ def _is_descriptive_text(name: str) -> bool:
       - 助詞が2種類以上含まれる → 文章の可能性が高い
       - prefix が「社」「会社」で終わる → 「修理会社株式会社」のような重複
     """
-    for legal in ["株式会社", "合同会社", "有限会社"]:
+    for legal in LEGAL_FORMS:
         if legal in name:
             prefix = name.split(legal)[0]
             particle_count = sum(1 for p in _PARTICLES if p in prefix)
@@ -95,9 +96,23 @@ def _remove_noise_phrases(name: str) -> str:
 
 
 def _truncate_at_separator(name: str) -> str:
-    """｜│―–—等のセパレータ以降（地名・業種注釈）を切り捨て先頭部分を返す。"""
-    parts = _NAME_SEP_CHARS.split(name, maxsplit=1)
-    return parts[0].strip()
+    """セパレータで全分割し、法人格を含む最初の部分を返す。
+    法人格を含む部分がなければ先頭部分を返す（フォールバック）。
+    100文字超の採用部分は [LONG_COMPANY_NAME_LEGAL/FALLBACK] で警告ログを出す。
+    """
+    parts = [p.strip() for p in _NAME_SEP_CHARS.split(name)]
+    if len(parts) == 1:
+        return parts[0]
+    for part in parts:
+        if has_legal_form(part):
+            if len(part) > 100:
+                logger.warning(f"[LONG_COMPANY_NAME_LEGAL] {len(part)} chars: {part}")
+            return part
+    # フォールバック: 法人格なし → 先頭採用（Phase 7-B で精度向上を検討）
+    first = parts[0]
+    if len(first) > 100:
+        logger.warning(f"[LONG_COMPANY_NAME_FALLBACK] {len(first)} chars: {first}")
+    return first
 
 
 def _dedupe_consecutive(name: str) -> str:

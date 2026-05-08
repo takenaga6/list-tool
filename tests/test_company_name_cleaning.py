@@ -4,10 +4,12 @@ agents/scraper_agent.py の会社名クリーニング関数のユニットテ�
 
 テスト対象:
   _remove_noise_phrases  - 末尾ノイズ語除去
-  _truncate_at_separator - セパレータ以降切り捨て
+  _truncate_at_separator - セパレータ以降切り捨て（法人格優先）
   _dedupe_consecutive    - 同一連続除去
   _clean_company_name    - 上記3つ + 既存ロジックの統合
 """
+import logging
+
 import pytest
 from agents.scraper_agent import (
     _remove_noise_phrases,
@@ -98,6 +100,53 @@ class TestTruncateAtSeparator:
 
     def test_empty_string(self):
         assert _truncate_at_separator("") == ""
+
+    # ── 法人格優先ロジック（Phase 7-A Step 2-fix）──
+    def test_prefix_toppage_legal_in_suffix(self):
+        # 先頭がノイズ語でも後半に法人格があれば後半を採用
+        assert _truncate_at_separator("トップページ - 株式会社仁平電設｜福島県白河市") == "株式会社仁平電設"
+
+    def test_prefix_location_legal_in_suffix(self):
+        # 先頭が地名でも後半に法人格があれば後半を採用
+        assert _truncate_at_separator("兵庫県西宮市｜ジェイカス株式会社") == "ジェイカス株式会社"
+
+    def test_prefix_description_legal_in_suffix(self):
+        # 先頭が説明文でも後半に法人格があれば後半を採用
+        assert _truncate_at_separator("情報社会に、新しいジャンルを創る。 ｜ リングロー株式会社") == "リングロー株式会社"
+
+    def test_multiple_legal_forms_takes_first(self):
+        # 法人格が複数ある場合は最初に出現したものを採用
+        assert _truncate_at_separator("A株式会社 - B株式会社") == "A株式会社"
+
+    def test_no_legal_form_generic_fallback(self):
+        # 法人格なし → 先頭採用
+        assert _truncate_at_separator("Fit | フィット") == "Fit"
+
+    def test_no_legal_form_falls_back_to_first(self):
+        # 法人格なしのフォールバック仕様固定（Phase 7-B で精度向上を検討）
+        # TODO Phase 7-B: 法人格なしケースの精度向上
+        result = _truncate_at_separator(
+            "ばねのことならおまかせ下さい！兵庫県豊岡市｜東豊精工 | バネのことならおまかせ"
+        )
+        assert result == "ばねのことならおまかせ下さい！兵庫県豊岡市"  # 現時点の仕様
+
+    def test_long_name_legal_warning(self, caplog):
+        # 法人格優先で採用した部分が100文字超 → LEGAL 警告ログ
+        long_part = "あ" * 98 + "株式会社"  # 102文字
+        name = "前置きノイズ | " + long_part
+        with caplog.at_level(logging.WARNING, logger="agents.scraper_agent"):
+            result = _truncate_at_separator(name)
+        assert result == long_part
+        assert "[LONG_COMPANY_NAME_LEGAL]" in caplog.text
+
+    def test_long_name_fallback_warning(self, caplog):
+        # 法人格なしのフォールバックが100文字超 → FALLBACK 警告ログ
+        long_first = "ほ" * 101  # 101文字、法人格なし
+        name = long_first + "｜テスト"
+        with caplog.at_level(logging.WARNING, logger="agents.scraper_agent"):
+            result = _truncate_at_separator(name)
+        assert result == long_first
+        assert "[LONG_COMPANY_NAME_FALLBACK]" in caplog.text
 
 
 # ── 3. _dedupe_consecutive ───────────────────────────────────────────────────
@@ -193,3 +242,21 @@ class TestCleanCompanyName:
     def test_prefix_digit_still_removed(self):
         # 既存: 先頭数字1-2桁 → 除去
         assert _clean_company_name("1株式会社ABC") == "株式会社ABC"
+
+    # ── 法人格優先ロジック（Phase 7-A Step 2-fix）統合確認 ──
+    def test_toppage_prefix_legal_in_body(self):
+        # ドライラン再現: 仁平電設（トップページ - 法人名｜地名）
+        assert _clean_company_name("トップページ - 株式会社仁平電設｜福島県白河市") == "株式会社仁平電設"
+
+    def test_location_prefix_legal_in_body(self):
+        # ドライラン再現: ジェイカス（地名｜法人名）
+        assert _clean_company_name("兵庫県西宮市｜ジェイカス株式会社") == "ジェイカス株式会社"
+
+    def test_toppage_legal_homepage_suffix(self):
+        # ドライラン再現: 日米商会（トップページ｜法人名ホームページ）
+        # ※ 「ホームページ」は _remove_noise_phrases が先に処理して除去
+        assert _clean_company_name("トップページ｜株式会社日米商会ホームページ") == "株式会社日米商会"
+
+    def test_description_legal_in_body(self):
+        # ドライラン再現: リングロー（説明文｜法人名）
+        assert _clean_company_name("情報社会に、新しいジャンルを創る。 ｜ リングロー株式会社") == "リングロー株式会社"
