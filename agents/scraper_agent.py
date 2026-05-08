@@ -9,6 +9,7 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
+from utils.prefecture_resolver import extract_prefecture_with_voting
 
 logger = logging.getLogger(__name__)
 
@@ -842,11 +843,15 @@ def scrape_company_info(
                 if m:
                     info["employee_count"] = m.group(1)
                     break
-            # 都道府県
-            for pref in ALL_PREFECTURES:
-                if pref in text:
-                    info["prefecture"] = pref
-                    break
+            # 都道府県（3ソース多数決）
+            _zip_minimal = ""
+            _zm = re.search(r"〒\s*(\d{3}[-ー]\d{4})", text)
+            if _zm:
+                _zip_minimal = _zm.group(1).replace("ー", "-")
+            info["zip_code"] = _zip_minimal
+            info["prefecture"] = extract_prefecture_with_voting(
+                _zip_minimal, info.get("phone", ""), text, url=target_url
+            )
             info["_page_text"] = text
         return info
     # ─────────────────────────────────────────────────────────
@@ -918,9 +923,13 @@ def scrape_company_info(
     if not info["phone"]:
         info["phone"] = extract_phone(all_text, main_soup)
 
-    zip_code, prefecture, full_address = extract_address_parts(all_text)
+    zip_code, _pref_linear, full_address = extract_address_parts(all_text)
     info["zip_code"] = zip_code
-    info["prefecture"] = prefecture
+    info["prefecture"] = extract_prefecture_with_voting(
+        zip_code, info.get("phone", ""), all_text, url=target_url
+    )
+    if info["prefecture"] and full_address and not full_address.startswith(info["prefecture"]):
+        full_address = ""
     info["address"] = full_address
 
     info["employee_count"] = extract_employee_count(all_text)
