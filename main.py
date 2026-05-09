@@ -41,6 +41,7 @@ from agents.rank_agent import evaluate_rank, evaluate_rank_v2, pre_screen
 from agents.hubspot_agent import HubSpotAgent
 from agents.keyword_agent import get_sorted_queries, record_hit, record_ng, record_rank_result, show_top_queries, is_s2_media_query
 from agents.list_page_agent import scrape_company_list_page, scrape_s1_media, scrape_s2_media
+from utils.shared_domains import startup_cleanup, is_shared_domain, add_shared_domain
 
 # ─── S1/S2対応リスト取得ヘルパー ──────────────────────────────────────────
 def _scrape_list_with_signal(list_url: str, max_companies: int = 200) -> list[dict]:
@@ -553,8 +554,14 @@ def process_one_company(
         company_domain = extract_domain(company_info.get("company_url") or url)
         if company_domain in processed_domains:
             return "skip"
+        # プロセス間共有ドメインチェック（並列実行時）
+        if is_shared_domain(company_domain):
+            logger.info(f"[並列] 別プロセス処理済みをスキップ: {company_domain}")
+            processed_domains.add(company_domain)
+            return "skip"
 
         processed_domains.add(company_domain)
+        add_shared_domain(company_domain)
 
         # ランク判定（Phase 1必須条件はHP本文を必要とするため page_text を渡す）
         page_text = company_info.get("_page_text", "")
@@ -1282,6 +1289,12 @@ def run_batch(
     """
     if period_keys is None:
         period_keys = ["3"]
+
+    # 起動時に共有ドメインキャッシュをクリーンアップ（7日超エントリ削除）
+    try:
+        startup_cleanup()
+    except Exception:
+        pass  # 共有ドメイン機能が使えなくても本体は動かす
 
     print_header()
     print(f"\n[BATCH] バッチモード起動")
