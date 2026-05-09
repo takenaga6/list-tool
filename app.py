@@ -197,6 +197,38 @@ with tab_listup:
         height=80,
     )
 
+    with st.expander("👥 並列実行設定（複数人でクエリを分担する場合）", expanded=False):
+        st.caption(
+            "複数人が同時にリストアップを実行するとき、クエリ範囲を分割して重複検索を防ぎます。"
+            " **Render Standard プランでの推奨は最大3人並列**。それ以上はインスタンス性能の確認が必要。"
+        )
+        _par_col1, _par_col2 = st.columns(2)
+        with _par_col1:
+            person_total = st.selectbox(
+                "並列人数（合計）",
+                options=[None, 1, 2, 3, 4, 5],
+                format_func=lambda x: "分割しない" if x is None else f"{x}人で分担",
+                index=0,
+                key="person_total",
+                help="全員が同じ値を選んでください",
+            )
+        with _par_col2:
+            _id_options = list(range(1, (person_total or 1) + 1)) if person_total else [None]
+            person_id = st.selectbox(
+                "自分のID",
+                options=_id_options,
+                format_func=lambda x: "—" if x is None else f"ID {x}",
+                index=0,
+                key="person_id",
+                help="1人1人が異なるIDを選んでください",
+                disabled=(person_total is None),
+            )
+        if person_total and person_id:
+            st.info(
+                f"✅ このセッションは **ID {person_id}/{person_total}** として動作します。"
+                f" クエリを {person_total} 分割した {person_id} 番目の範囲を担当します。"
+            )
+
     run_col, status_col = st.columns([1, 3])
     with run_col:
         run_btn = st.button("🚀 リストアップ開始", type="primary", width="stretch")
@@ -230,6 +262,8 @@ with tab_listup:
                 cmd += ["--list-urls"] + extra_list_urls
             if confirm_mode:
                 cmd.append("--confirm")
+            if person_total and person_id:
+                cmd += ["--person-total", str(person_total), "--person-id", str(person_id)]
             _lu_env_offset = str(_lu_offset)
 
             st.info(f"実行コマンド: `{' '.join(cmd)}`")

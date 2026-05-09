@@ -1271,11 +1271,14 @@ def run_batch(
     auto_mode: bool = True,
     extra_list_urls: list[str] | None = None,
     confirm_mode: bool = False,
+    person_id: int | None = None,
+    person_total: int | None = None,
 ) -> dict:
     """
     バッチモード: input() なしでリストアップを実行する。
     Streamlit / python main.py --batch から呼ばれる。
     confirm_mode=True の場合は HubSpot 登録せず output/pending_review.json に候補を書き出す。
+    person_id / person_total を指定するとクエリリストを分割して担当範囲のみ実行する。
     """
     if period_keys is None:
         period_keys = ["3"]
@@ -1286,6 +1289,8 @@ def run_batch(
     print(f"  目標件数: {target_count}件")
     print(f"  期間キー: {', '.join(period_keys)}")
     print(f"  モード: {'自動（媒体リスト＋学習クエリ）' if auto_mode else '手動（キーワードのみ）'}")
+    if person_id and person_total:
+        print(f"  並列ID: {person_id}/{person_total}（クエリを{person_total}分割して担当分のみ実行）")
     if confirm_mode:
         print(f"  [確認モード] HubSpot登録せず pending_review.json に書き出します\n")
     else:
@@ -1304,6 +1309,12 @@ def run_batch(
         # 複数人同時使用時の分散: LISTUP_WORKER_OFFSETで各ワーカーの開始位置をずらす
         worker_offset = int(os.environ.get("LISTUP_WORKER_OFFSET", "0"))
         query_list = get_sorted_queries(keywords, worker_offset=worker_offset)
+        # クエリ範囲分割（person_id 指定時のみ）
+        if person_id and person_total and 1 <= person_id <= person_total:
+            chunk_size = math.ceil(len(query_list) / person_total)
+            start = (person_id - 1) * chunk_size
+            query_list = query_list[start: start + chunk_size]
+            print(f"[並列] person {person_id}/{person_total}: クエリ {start+1}〜{start+len(query_list)}件を担当")
         list_urls  = list(MEDIA_LIST_URLS)
         if extra_list_urls:
             list_urls = extra_list_urls + list_urls
@@ -1548,13 +1559,15 @@ if __name__ == "__main__":
     elif "--batch" in sys.argv:
         import argparse
         parser = argparse.ArgumentParser()
-        parser.add_argument("--batch",      action="store_true")
-        parser.add_argument("--keywords",   nargs="*", default=[])
-        parser.add_argument("--count",      type=int, default=50)
-        parser.add_argument("--periods",    nargs="*", default=["3"])
-        parser.add_argument("--list-urls",  nargs="*", default=[], dest="list_urls")
-        parser.add_argument("--auto",       action="store_true")
-        parser.add_argument("--confirm",    action="store_true")
+        parser.add_argument("--batch",        action="store_true")
+        parser.add_argument("--keywords",     nargs="*", default=[])
+        parser.add_argument("--count",        type=int, default=50)
+        parser.add_argument("--periods",      nargs="*", default=["3"])
+        parser.add_argument("--list-urls",    nargs="*", default=[], dest="list_urls")
+        parser.add_argument("--auto",         action="store_true")
+        parser.add_argument("--confirm",      action="store_true")
+        parser.add_argument("--person-id",    type=int, default=None, dest="person_id")
+        parser.add_argument("--person-total", type=int, default=None, dest="person_total")
         args = parser.parse_args()
         run_batch(
             keywords=args.keywords or [],
@@ -1563,6 +1576,8 @@ if __name__ == "__main__":
             auto_mode=args.auto,
             extra_list_urls=args.list_urls or None,
             confirm_mode=args.confirm,
+            person_id=args.person_id,
+            person_total=args.person_total,
         )
     else:
         main()
