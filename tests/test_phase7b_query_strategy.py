@@ -157,5 +157,86 @@ class TestTotalQueryCount(unittest.TestCase):
         self.assertEqual(len(queries), len(set(queries)), "重複クエリあり")
 
 
+class TestNormalizeQueryKey(unittest.TestCase):
+    """normalize_query_key() のユニットテスト"""
+
+    def test_ng_suffix_stripped(self):
+        from agents.keyword_agent import normalize_query_key
+        q = f"KENJA GLOBAL 株式会社{NG_INDUSTRY_SUFFIX}"
+        self.assertEqual(normalize_query_key(q), "KENJA GLOBAL 株式会社")
+
+    def test_no_suffix_unchanged(self):
+        from agents.keyword_agent import normalize_query_key
+        q = "KENJA GLOBAL 株式会社"
+        self.assertEqual(normalize_query_key(q), q)
+
+    def test_empty_string_unchanged(self):
+        from agents.keyword_agent import normalize_query_key
+        self.assertEqual(normalize_query_key(""), "")
+
+    def test_partial_suffix_unchanged(self):
+        from agents.keyword_agent import normalize_query_key
+        q = "KENJA GLOBAL 株式会社 -建設"
+        self.assertEqual(normalize_query_key(q), q)
+
+
+class TestNormalizeQueryKeyStatsSharing(unittest.TestCase):
+    """旧キーと新キーが同一 stats エントリを共有するテスト"""
+
+    def test_old_and_new_key_normalize_to_same(self):
+        from agents.keyword_agent import normalize_query_key
+        old_key = "KENJA GLOBAL 株式会社"
+        new_key = f"KENJA GLOBAL 株式会社{NG_INDUSTRY_SUFFIX}"
+        self.assertEqual(normalize_query_key(old_key), normalize_query_key(new_key))
+
+    def test_get_sorted_queries_uses_normalized_key(self):
+        from unittest.mock import patch
+        from agents.keyword_agent import get_sorted_queries
+        old_key = "KENJA GLOBAL 株式会社"
+        mock_stats = {
+            "_version": "2.0",
+            "queries": {old_key: {"runs": 5, "total_hits": 0, "avg_hits": 0.0}},
+        }
+        with patch("agents.keyword_agent.load_stats", return_value=mock_stats):
+            result = get_sorted_queries(exclude_dead=True)
+        new_key = f"KENJA GLOBAL 株式会社{NG_INDUSTRY_SUFFIX}"
+        self.assertNotIn(new_key, result, "旧keyのdead判定が新keyに引き継がれること")
+
+
+class TestS2MarkersAllCovered(unittest.TestCase):
+    """S2クエリ20件全件が is_s2_media_query で True になること"""
+
+    S2_ALL_QUERIES = [
+        "アクサ生命 Voice Report 掲載 株式会社",
+        "アクサ生命 Voice Report 取材 株式会社",
+        "アクサ生命 Voice Report インタビュー 代表",
+        "アクサ生命 ボイスレポート 掲載 株式会社",
+        "アクサ生命 健康経営 Voice Report 株式会社",
+        "アクサ生命 健康経営アクサ式 掲載 株式会社",
+        "アクサ 健康経営 Voice Report 代表取締役",
+        "アクサ生命 Voice Report 取材いただきました",
+        "アクサ生命 Voice Report 紹介されました",
+        "アクサ生命 健康経営 取材 代表取締役 株式会社",
+        "DAIDO KENCO AWARD 受賞 株式会社",
+        "DAIDO KENCO AWARD 認定 代表取締役",
+        "大同生命 KENCO AWARD 受賞 株式会社",
+        "大同生命 KENCO AWARD 掲載 株式会社",
+        "大同生命 健康経営 AWARD 株式会社",
+        "大同生命 健康経営 受賞 代表取締役",
+        "大同生命 KENCO 認定企業 株式会社",
+        "大同生命 健康経営 表彰 株式会社",
+        "DAIDO KENCO 受賞しました 株式会社",
+        "大同生命 健康経営アワード 株式会社",
+    ]
+
+    def test_all_20_queries_detected(self):
+        for q in self.S2_ALL_QUERIES:
+            self.assertTrue(is_s2_media_query(q), f"S2クエリが未検出: {q!r}")
+
+    def test_non_s2_not_detected(self):
+        self.assertFalse(is_s2_media_query("健康経営優良法人 東京都"))
+        self.assertFalse(is_s2_media_query("KENJA GLOBAL 株式会社"))
+
+
 if __name__ == "__main__":
     unittest.main()

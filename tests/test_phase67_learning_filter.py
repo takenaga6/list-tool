@@ -84,7 +84,9 @@ class TestGetSortedQueriesDeadExclusion(unittest.TestCase):
         """死んだクエリ（runs=5, hits=0）は結果に含まれない"""
         from config import NG_INDUSTRY_SUFFIX
         dead_query = f"B-PLUS 株式会社{NG_INDUSTRY_SUFFIX}"
-        mock_stats = _make_stats(**{dead_query: _make_query_data(runs=5, total_hits=0)})
+        # stats は normalize_query_key() で正規化されたキー（NG suffix なし）で保存される
+        dead_key = "B-PLUS 株式会社"
+        mock_stats = _make_stats(**{dead_key: _make_query_data(runs=5, total_hits=0)})
         with patch("agents.keyword_agent.load_stats", return_value=mock_stats):
             result = get_sorted_queries(exclude_dead=True)
         self.assertNotIn(dead_query, result)
@@ -121,7 +123,9 @@ class TestGetSortedQueriesDeadExclusion(unittest.TestCase):
         """exclude_dead のデフォルト値は True（引数省略で死んだクエリ除外）"""
         from config import NG_INDUSTRY_SUFFIX
         dead_query = f"B-PLUS 株式会社{NG_INDUSTRY_SUFFIX}"
-        mock_stats = _make_stats(**{dead_query: _make_query_data(runs=5, total_hits=0)})
+        # stats は normalize_query_key() で正規化されたキー（NG suffix なし）で保存される
+        dead_key = "B-PLUS 株式会社"
+        mock_stats = _make_stats(**{dead_key: _make_query_data(runs=5, total_hits=0)})
         with patch("agents.keyword_agent.load_stats", return_value=mock_stats):
             result = get_sorted_queries()  # デフォルト引数で呼び出し
         self.assertNotIn(dead_query, result)
