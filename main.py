@@ -7,12 +7,14 @@ Google検索 → スクレイピング → ランク判定 → HubSpot登録
 import csv
 import json
 import logging
+import math
 import os
 import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
+from filelock import FileLock
 
 from config import (
     HUBSPOT_TOKEN,
@@ -1449,6 +1451,7 @@ def run_batch(
     if confirm_mode:
         import json as _json
         pending_path = os.path.join(OUTPUT_DIR, "pending_review.json")
+        _pending_lock = FileLock(pending_path + ".lock", timeout=10)
         try:
             # ファイルヘッダーを確認して正しい fieldnames で読む
             with open(RESULTS_FILE, "r", encoding="utf-8-sig") as f:
@@ -1462,8 +1465,17 @@ def run_batch(
                 all_rows = list(reader)
             # 今回のバッチで追加された行（最新 stats["success"] 件）
             new_rows = all_rows[-stats["success"]:] if stats["success"] > 0 else []
-            with open(pending_path, "w", encoding="utf-8") as f:
-                _json.dump(new_rows, f, ensure_ascii=False, indent=2)
+            with _pending_lock:
+                existing: list = []
+                if os.path.exists(pending_path):
+                    try:
+                        with open(pending_path, "r", encoding="utf-8") as f:
+                            existing = _json.load(f)
+                    except Exception:
+                        existing = []
+                merged = existing + new_rows
+                with open(pending_path, "w", encoding="utf-8") as f:
+                    _json.dump(merged, f, ensure_ascii=False, indent=2)
             print(f"\n[確認モード] {len(new_rows)}件を pending_review.json に書き出しました")
             print(f"   Streamlit の「リストアップ」タブで承認/却下できます")
         except Exception as e:

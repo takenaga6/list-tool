@@ -9,3 +9,4 @@ gspread>=5.0.0
 google-auth>=2.0.0
 ddgs>=9.0.0
 streamlit-autorefresh>=1.0.1
+filelock>=3.13.0

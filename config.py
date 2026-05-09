@@ -1,6 +1,7 @@
 import os
 import json
 import re
+from filelock import FileLock
 
 # .envファイルがあれば読み込む（ローカル開発用）
 try:
@@ -601,6 +602,7 @@ MEDIA_LIST_URLS: list[str] = S2_MEDIA_LIST_URLS + S1_MEDIA_LIST_URLS
 EXCLUDED_COMPANIES_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "excluded_companies.json"
 )
+_EXCLUDED_LOCK = FileLock(EXCLUDED_COMPANIES_FILE + ".lock", timeout=10)
 
 _excluded_cache: set[str] | None = None  # プロセス内インメモリキャッシュ
 
@@ -635,30 +637,31 @@ def add_to_excluded_companies(company_name: str, reason: str):
     """
     if not company_name:
         return
-    cache = _load_excluded_cache()
-    if company_name in cache:
-        return  # 重複追記しない
+    with _EXCLUDED_LOCK:
+        cache = _load_excluded_cache()
+        if company_name in cache:
+            return  # 重複追記しない
 
-    entries: list = []
-    if os.path.exists(EXCLUDED_COMPANIES_FILE):
+        entries: list = []
+        if os.path.exists(EXCLUDED_COMPANIES_FILE):
+            try:
+                with open(EXCLUDED_COMPANIES_FILE, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+            except Exception:
+                entries = []
+
+        from datetime import datetime as _dt
+        entries.append({
+            "company_name": company_name,
+            "reason":       reason,
+            "excluded_at":  _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
         try:
-            with open(EXCLUDED_COMPANIES_FILE, "r", encoding="utf-8") as f:
-                entries = json.load(f)
+            with open(EXCLUDED_COMPANIES_FILE, "w", encoding="utf-8") as f:
+                json.dump(entries, f, ensure_ascii=False, indent=2)
+            cache.add(company_name)  # インメモリキャッシュも更新
         except Exception:
-            entries = []
-
-    from datetime import datetime as _dt
-    entries.append({
-        "company_name": company_name,
-        "reason":       reason,
-        "excluded_at":  _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-    })
-    try:
-        with open(EXCLUDED_COMPANIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(entries, f, ensure_ascii=False, indent=2)
-        cache.add(company_name)  # インメモリキャッシュも更新
-    except Exception:
-        pass
+            pass
 
 # ── media_config.json からカスタム媒体を自動マージ ────────────────────
 # 起動時に一度だけ実行され、S1/S2/MEDIA_LIST_URLS を自動拡張する。

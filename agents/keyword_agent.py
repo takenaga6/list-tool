@@ -14,6 +14,7 @@ import sys as _sys
 import logging
 import itertools
 from datetime import datetime
+from filelock import FileLock
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ _ROOT = os.path.join(_DIR, "..")
 _sys.path.insert(0, _ROOT)
 from config import OUTPUT_DIR as _OUTPUT_DIR, NG_INDUSTRY_SUFFIX
 KEYWORD_STATS_FILE = os.path.join(_OUTPUT_DIR, "keyword_stats.json")
+_STATS_LOCK = FileLock(KEYWORD_STATS_FILE + ".lock", timeout=10)
 
 # ===== キーワードマスタ =====
 
@@ -460,21 +462,22 @@ def record_hit(query: str, hit_count: int, source: str = None):
     """
     if source is None:
         source = DEFAULT_SOURCE
-    stats = load_stats()
-    qd = _get_query_data(stats, query)
+    with _STATS_LOCK:
+        stats = load_stats()
+        qd = _get_query_data(stats, query)
 
-    # クエリ全体の集計（既存と同じ）
-    qd["total_hits"] += hit_count
-    qd["runs"] += 1
-    qd["avg_hits"] = qd["total_hits"] / qd["runs"]
-    qd["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # クエリ全体の集計（既存と同じ）
+        qd["total_hits"] += hit_count
+        qd["runs"] += 1
+        qd["avg_hits"] = qd["total_hits"] / qd["runs"]
+        qd["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # source別の集計（新規）
-    sd = _get_source_data(qd, source)
-    sd["hits"] += hit_count
-    sd["runs"] += 1
+        # source別の集計（新規）
+        sd = _get_source_data(qd, source)
+        sd["hits"] += hit_count
+        sd["runs"] += 1
 
-    save_stats(stats)
+        save_stats(stats)
 
 
 def record_ng(query: str, source: str = None):
@@ -486,25 +489,26 @@ def record_ng(query: str, source: str = None):
     """
     if source is None:
         source = DEFAULT_SOURCE
-    stats = load_stats()
-    nkey = normalize_query_key(query)
-    if "queries" not in stats or nkey not in stats["queries"]:
-        return
-    qd = stats["queries"][nkey]
+    with _STATS_LOCK:
+        stats = load_stats()
+        nkey = normalize_query_key(query)
+        if "queries" not in stats or nkey not in stats["queries"]:
+            return
+        qd = stats["queries"][nkey]
 
-    # クエリ全体（既存と同じ）
-    qd["ng_count"] = qd.get("ng_count", 0) + 1
-    total_processed = qd.get("a_rank", 0) + qd.get("b_rank", 0) + qd["ng_count"]
-    if total_processed > 0:
-        qd["ng_rate"] = qd["ng_count"] / total_processed
+        # クエリ全体（既存と同じ）
+        qd["ng_count"] = qd.get("ng_count", 0) + 1
+        total_processed = qd.get("a_rank", 0) + qd.get("b_rank", 0) + qd["ng_count"]
+        if total_processed > 0:
+            qd["ng_rate"] = qd["ng_count"] / total_processed
 
-    # source別（新規）
-    if "by_source" not in qd:
-        qd["by_source"] = {}
-    sd = _get_source_data(qd, source)
-    sd["ng_count"] += 1
+        # source別（新規）
+        if "by_source" not in qd:
+            qd["by_source"] = {}
+        sd = _get_source_data(qd, source)
+        sd["ng_count"] += 1
 
-    save_stats(stats)
+        save_stats(stats)
 
 
 def record_rank_result(query: str, rank: str, source: str = None):
@@ -517,29 +521,30 @@ def record_rank_result(query: str, rank: str, source: str = None):
     """
     if source is None:
         source = DEFAULT_SOURCE
-    stats = load_stats()
-    qd = _get_query_data(stats, query)
+    with _STATS_LOCK:
+        stats = load_stats()
+        qd = _get_query_data(stats, query)
 
-    # クエリ全体（既存と同じ）
-    if rank == "A":
-        qd["a_rank"] = qd.get("a_rank", 0) + 1
-    elif rank == "B":
-        qd["b_rank"] = qd.get("b_rank", 0) + 1
+        # クエリ全体（既存と同じ）
+        if rank == "A":
+            qd["a_rank"] = qd.get("a_rank", 0) + 1
+        elif rank == "B":
+            qd["b_rank"] = qd.get("b_rank", 0) + 1
 
-    total_ab = qd["a_rank"] + qd.get("b_rank", 0)
-    total_processed = total_ab + qd.get("ng_count", 0)
-    total_hits = max(qd["total_hits"], 1)
-    qd["ab_rate"] = total_ab / total_hits
-    qd["a_rate"] = qd["a_rank"] / max(total_processed, 1)
+        total_ab = qd["a_rank"] + qd.get("b_rank", 0)
+        total_processed = total_ab + qd.get("ng_count", 0)
+        total_hits = max(qd["total_hits"], 1)
+        qd["ab_rate"] = total_ab / total_hits
+        qd["a_rate"] = qd["a_rank"] / max(total_processed, 1)
 
-    # source別（新規）
-    sd = _get_source_data(qd, source)
-    if rank == "A":
-        sd["a_rank"] += 1
-    elif rank == "B":
-        sd["b_rank"] += 1
+        # source別（新規）
+        sd = _get_source_data(qd, source)
+        if rank == "A":
+            sd["a_rank"] += 1
+        elif rank == "B":
+            sd["b_rank"] += 1
 
-    save_stats(stats)
+        save_stats(stats)
 
 
 def get_sorted_queries(
