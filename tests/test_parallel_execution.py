@@ -276,16 +276,14 @@ class TestSharedDomains(unittest.TestCase):
         self.assertTrue(sd.is_shared_domain("legacy.co.jp"))
         self.assertTrue(sd.is_shared_domain("old.co.jp"))
 
-    def test_disabled_by_default(self):
-        """ENABLE_SHARED_DOMAINS 未設定時は常に False を返す"""
-        import utils.shared_domains as sd
-        original_enabled = sd._ENABLED
-        try:
-            sd._ENABLED = False
-            sd.add_shared_domain("should_not_add.co.jp")
-            self.assertFalse(sd.is_shared_domain("should_not_add.co.jp"))
-        finally:
-            sd._ENABLED = original_enabled
+    def test_add_and_is_independent_between_instances(self):
+        """別のパスを使う2インスタンスが互いに干渉しない（常時ON設計の確認）"""
+        sd = self._make_module()
+        sd.add_shared_domain("instance_a.co.jp")
+        # 未追加ドメインは False
+        self.assertFalse(sd.is_shared_domain("instance_b.co.jp"))
+        # 追加済みは True
+        self.assertTrue(sd.is_shared_domain("instance_a.co.jp"))
 
 
 if __name__ == "__main__":

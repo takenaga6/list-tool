@@ -30,10 +30,6 @@ _SHARED_DOMAINS_LOCK = FileLock(_SHARED_DOMAINS_FILE + ".lock", timeout=10)
 _MAX_ENTRIES = 10_000
 _CLEANUP_DAYS = 7
 
-# 環境変数 ENABLE_SHARED_DOMAINS=1 でのみ有効化（デフォルト無効）
-# Render Dashboard で設定すること。未設定時は is_shared_domain / add_shared_domain は即リターンする。
-_ENABLED = os.environ.get("ENABLE_SHARED_DOMAINS", "0") == "1"
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -86,9 +82,7 @@ def _cleanup(data: dict) -> dict:
 
 
 def startup_cleanup():
-    """起動時に一度だけ呼ぶ。古いエントリを削除する。ENABLE_SHARED_DOMAINS=1 のときのみ動作。"""
-    if not _ENABLED:
-        return
+    """起動時に一度だけ呼ぶ。古いエントリを削除する。"""
     with _SHARED_DOMAINS_LOCK:
         data = _load_raw()
         data = _cleanup(data)
@@ -96,8 +90,8 @@ def startup_cleanup():
 
 
 def is_shared_domain(domain: str) -> bool:
-    """別プロセスが処理済みのドメインか確認する。ENABLE_SHARED_DOMAINS=1 のときのみ有効。"""
-    if not _ENABLED or not domain:
+    """別プロセスが処理済みのドメインか確認する（ロック取得あり）"""
+    if not domain:
         return False
     with _SHARED_DOMAINS_LOCK:
         data = _load_raw()
@@ -106,8 +100,8 @@ def is_shared_domain(domain: str) -> bool:
 
 
 def add_shared_domain(domain: str) -> bool:
-    """ドメインを共有リストに追加する。ENABLE_SHARED_DOMAINS=1 のときのみ有効。既存なら False を返す。"""
-    if not _ENABLED or not domain:
+    """ドメインを共有リストに追加する。既存なら False を返す。"""
+    if not domain:
         return False
     with _SHARED_DOMAINS_LOCK:
         data = _load_raw()
