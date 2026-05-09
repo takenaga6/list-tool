@@ -54,30 +54,15 @@ S1_MEDIA_LIST_URLS: list[str] = [
 ]
 
 # S2: 健康経営メディアリストページ（一覧スクレイプ → S2確定）
-# Phase 5.2: voice-report.jp / daido-kenco-award.jp は SPA のため検索クエリ逆引き方式へ移行
+# voice-report.jp / daido-kenco-award.jp は SPA のため keyword_agent の検索クエリ経由で取得
 S2_MEDIA_LIST_URLS: list[str] = [
     "https://kenko-keiei.jp/houjin_list/",       # 健康経営優良法人（Excel自動DL）
-    # "https://www.voice-report.jp/",            # Phase 5.2: SPA → S2_SEARCH_BASED_QUERIES へ
+    # "https://www.voice-report.jp/",            # SPA → keyword_agent S2クエリ経由
     "https://kenkoukeiei-media.com/",            # 健康経営の広場
-    # "https://daido-kenco-award.jp/companies/", # Phase 5.2: SPA → S2_SEARCH_BASED_QUERIES へ
+    # "https://daido-kenco-award.jp/companies/", # SPA → keyword_agent S2クエリ経由
 ]
 
-# Phase 5.2: SPA メディア（voice-report.jp 等）の検索クエリ逆引き方式
-# 各企業が「掲載されました」と自社サイトで告知しているページを検索で発見する
-S2_SEARCH_BASED_QUERIES: dict[str, list[str]] = {
-    "voice_report": [
-        '"Voice Report" 健康経営 アクサ生命 掲載されました',
-        '"Voice Report" アクサ生命 取材いただきました',
-        '"健康経営アクサ式" Voice Report 掲載',
-    ],
-    "daido_kenco": [
-        '"DAIDO KENCO AWARD" 受賞しました',
-        '"DAIDO KENCO AWARD" 表彰',
-        '"大同生命" KENCO AWARD 認定企業',
-    ],
-}
-
-# Phase 5.2: 検索結果から除外するニュース・PR サイトドメイン
+# 検索結果から除外するニュース・PR サイトドメイン
 # （search_agent.py の EXCLUDE_DOMAINS に含まれないものを補完）
 NEWS_SITE_DOMAINS: list[str] = [
     "digitalpr.jp",
@@ -91,10 +76,9 @@ NEWS_SITE_DOMAINS: list[str] = [
     "sciencedirect.com",
 ]
 
-# Phase 6.3: Phase 5.2 の一時無効化フラグ
-# 2026-05-07: voice_report / daido_kenco のクエリが0件取得のため無効化
-# 再有効化: True に変更（クエリ調整後）
-ENABLE_PHASE_5_2: bool = False
+# 検索クエリの末尾に付加するネガティブキーワード（S1/S7/S9 系に適用）
+# 建設・運輸・介護・出版など、ターゲット外業種の除去用
+NG_INDUSTRY_SUFFIX: str = " -建設 -工務店 -土木 -運輸 -運送 -介護 -出版社 -調剤薬局"
 
 # ランク閾値
 RANK_A_EXTRA_SIGNALS = 2   # S1/S2あり + S3〜S6がこの数以上 → A

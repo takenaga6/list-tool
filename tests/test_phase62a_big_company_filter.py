@@ -6,7 +6,6 @@ from config import (
     PROFITABLE_INDUSTRY_KEYWORDS,
     LARGE_COMPANY_DOMAINS,
     BIG_COMPANY_DOMAINS,
-    ENABLE_PHASE_5_2,
 )
 
 
@@ -119,14 +118,18 @@ class TestS10ProfitableKeywords(unittest.TestCase):
         self.assertIn("クラウドサービス", PROFITABLE_INDUSTRY_KEYWORDS)
 
 
-class TestPhase52Flag(unittest.TestCase):
-    """Phase 6.3: ENABLE_PHASE_5_2 フラグで Phase 5.2 が無効化されている"""
+class TestPhase52Integrated(unittest.TestCase):
+    """Phase 7-B: Phase 5.2 は keyword_agent の S2 クエリに統合済み"""
 
-    def test_phase52_disabled_by_default(self):
-        self.assertFalse(ENABLE_PHASE_5_2, "ENABLE_PHASE_5_2 は False であること")
+    def test_phase52_flag_removed(self):
+        # ENABLE_PHASE_5_2 フラグは廃止され config に存在しない
+        import config
+        self.assertFalse(hasattr(config, "ENABLE_PHASE_5_2"), "ENABLE_PHASE_5_2 は廃止済みのため config に不要")
 
-    def test_phase52_flag_is_bool(self):
-        self.assertIsInstance(ENABLE_PHASE_5_2, bool)
+    def test_s2_search_based_queries_removed(self):
+        # S2_SEARCH_BASED_QUERIES は keyword_agent に移管されたため config に存在しない
+        import config
+        self.assertFalse(hasattr(config, "S2_SEARCH_BASED_QUERIES"), "S2_SEARCH_BASED_QUERIES は廃止済み")
 
 
 if __name__ == "__main__":

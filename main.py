@@ -28,8 +28,6 @@ from config import (
     EXCLUDE_LIST_CSV,
     S1_MEDIA_LIST_URLS,
     S2_MEDIA_LIST_URLS,
-    S2_SEARCH_BASED_QUERIES,
-    ENABLE_PHASE_5_2,
     MEDIA_LIST_URLS,
     MIN_REGISTER_SIGNALS,
     is_excluded_company,
@@ -39,7 +37,7 @@ from agents.search_agent import extract_domain, search_google, get_companies_fro
 from agents.scraper_agent import scrape_company_info, find_media_article_url
 from agents.rank_agent import evaluate_rank, evaluate_rank_v2, pre_screen
 from agents.hubspot_agent import HubSpotAgent
-from agents.keyword_agent import get_sorted_queries, record_hit, record_ng, record_rank_result, show_top_queries
+from agents.keyword_agent import get_sorted_queries, record_hit, record_ng, record_rank_result, show_top_queries, is_s2_media_query
 from agents.list_page_agent import scrape_company_list_page, scrape_s1_media, scrape_s2_media
 
 # ─── S1/S2対応リスト取得ヘルパー ──────────────────────────────────────────
@@ -528,7 +526,8 @@ def process_one_company(
         # ── Agent2: スクレイピング ──────────────────────────────────
         # S1/S2確定企業は minimal=True（電話番号・従業員数・都道府県のみ取得・高速）
         _s1_confirmed = search_result.get("source_confirmed_s1", False)
-        _s2_confirmed = search_result.get("source_confirmed_s2", False)
+        # S2クエリ経由（voice-report / daido-kenco）も source_confirmed_s2 と同等に扱う
+        _s2_confirmed = search_result.get("source_confirmed_s2", False) or is_s2_media_query(search_result.get("search_query", ""))
         company_info = scrape_company_info(
             url,
             is_media_page=is_media_page,
@@ -1377,34 +1376,6 @@ def run_batch(
                         if status in stats:
                             stats[status] += 1
                 print_progress(stats, start_time)
-
-        # ─── ①.5 Phase 5.2: 検索クエリベースの S2 取得 ─────────────
-        if ENABLE_PHASE_5_2:
-            if stats["success"] < target_count and auto_mode and S2_SEARCH_BASED_QUERIES:
-                for s2_media_name, s2_queries in S2_SEARCH_BASED_QUERIES.items():
-                    if stats["success"] >= target_count:
-                        break
-                    print(f"\n🔎 [Phase 5.2] {s2_media_name}: 検索クエリ逆引き開始...")
-                    s2_results = get_companies_from_search_queries(
-                        s2_queries, s2_media_name, max_per_query=20
-                    )
-                    if not s2_results:
-                        print(f"  → {s2_media_name}: 取得0社")
-                        continue
-                    print(f"  → {len(s2_results)}社を処理開始...")
-                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                        futures = {
-                            executor.submit(
-                                process_one_company, r, hubspot, combined_results_writer, processed_domains, None
-                            ): r for r in s2_results
-                        }
-                        for future in as_completed(futures):
-                            status = future.result()
-                            if status in stats:
-                                stats[status] += 1
-                    print_progress(stats, start_time)
-        else:
-            logger.info("[Phase 5.2] フラグ ENABLE_PHASE_5_2=False のためスキップ")
 
         # ─── ② キーワード検索 ─────────────────────────────────────
         if stats["success"] < target_count and query_list:

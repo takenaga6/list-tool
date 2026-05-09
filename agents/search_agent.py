@@ -48,6 +48,9 @@ EXCLUDE_DOMAINS = [
     # 企業DB・ポータル系
     "corporatedb.jp", "houjin.info", "baseconnect.in",
     "jobcatalog.yahoo.co.jp",
+    # PR・プレスリリースサイト（NEWS_SITE_DOMAINS由来）
+    "digitalpr.jp", "shinnihon-ins.co.jp", "hokende.com",
+    "pressreader.com", "bloomberg.com", "sciencedirect.com",
 ]
 
 # ドメインにこのキーワードが含まれる場合はメディア・ポータル等と判断して除外

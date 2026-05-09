@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_DIR, "..")
 _sys.path.insert(0, _ROOT)
-from config import OUTPUT_DIR as _OUTPUT_DIR
+from config import OUTPUT_DIR as _OUTPUT_DIR, NG_INDUSTRY_SUFFIX
 KEYWORD_STATS_FILE = os.path.join(_OUTPUT_DIR, "keyword_stats.json")
 
 # ===== キーワードマスタ =====
@@ -171,6 +171,22 @@ A_RATE_THRESHOLD = 0.05   # A率5%未満かつ5回以上実行済み → 降格
 # ===== Phase 6.7B: 履歴ない媒体の初回試行用・主要5都道府県 =====
 PRIORITY_PREFECTURES = ["東京都", "大阪府", "愛知県", "神奈川県", "福岡県"]
 
+# ===== S2検索クエリ識別マーカー =====
+# これらの文字列を含むクエリは S2 媒体経由とみなし source_confirmed_s2=True をセットする
+S2_QUERY_MARKERS: list[str] = [
+    "Voice Report",
+    "ボイスレポート",
+    "DAIDO KENCO",
+    "大同生命 KENCO",
+    "大同生命 健康経営アワード",
+]
+
+
+def is_s2_media_query(query: str) -> bool:
+    """クエリが S2 メディア（voice-report / daido-kenco）由来かどうかを判定する。"""
+    return any(marker in query for marker in S2_QUERY_MARKERS)
+
+
 # ===== Phase 3.3 学習システム拡張 =====
 STATS_VERSION = "2.0"
 DEFAULT_SOURCE = "search"  # source未指定時のデフォルト
@@ -223,10 +239,10 @@ def generate_all_queries() -> list[str]:
     """
     queries = []
 
-    # 1. 媒体名 × 定型フレーズ（最優先）
+    # 1. S1: 媒体名 × 定型フレーズ（最優先・NG業種除外付き）
     for media in PR_MEDIA:
         for suffix in MEDIA_SUFFIXES:
-            queries.append(f"{media} {suffix}")
+            queries.append(f"{media} {suffix}{NG_INDUSTRY_SUFFIX}")
 
     # 2. 高精度フレーズ（健康・福利厚生）
     queries.extend(HEALTH_WELFARE)
@@ -240,18 +256,18 @@ def generate_all_queries() -> list[str]:
     # 5. 採用・認定シグナル
     queries.extend(GROWTH_SIGNALS)
 
-    # 7. 媒体名 × 大分類（汎用）
+    # 7. S7: 媒体名 × 大分類（汎用・NG業種除外付き）
     CATEGORY_L1 = ["株式会社", "健康経営", "代表取締役", "えるぼし認定", "法定外福利厚生"]
     for media in PR_MEDIA:
         for l1 in CATEGORY_L1:
-            queries.append(f"{media} {l1}")
+            queries.append(f"{media} {l1}{NG_INDUSTRY_SUFFIX}")
 
     # 8. 採用媒体 × 福利厚生・健康経営
     for media in RECRUIT_MEDIA:
         for suffix in RECRUIT_SUFFIXES:
             queries.append(f"{media} {suffix}")
 
-    # 9. 地域 × 媒体名（S1-B検索型）
+    # 9. S9: 地域 × 媒体名（S1-B検索型・NG業種除外付き）
     # Phase 6.7B: 媒体ごとにヒット履歴を確認し、履歴なしは主要5都道府県のみ生成
     try:
         from config import SEARCH_REGIONS
@@ -260,11 +276,11 @@ def generate_all_queries() -> list[str]:
             if has_media_hit_history(media, _stats_for_media):
                 # ヒット実績あり → 全47都道府県
                 for region in SEARCH_REGIONS:
-                    queries.append(f"{media} {region} 株式会社")
+                    queries.append(f"{media} {region} 株式会社{NG_INDUSTRY_SUFFIX}")
             else:
                 # 履歴なし → 主要5都道府県のみ（初回試行コスト削減）
                 for region in PRIORITY_PREFECTURES:
-                    queries.append(f"{media} {region} 株式会社")
+                    queries.append(f"{media} {region} 株式会社{NG_INDUSTRY_SUFFIX}")
     except ImportError:
         pass
 
@@ -275,6 +291,47 @@ def generate_all_queries() -> list[str]:
         for region in SEARCH_REGIONS:
             for suffix in REGION_SUFFIXES:
                 queries.append(f"{region} {suffix}")
+    except ImportError:
+        pass
+
+    # 11. S2: アクサ生命 Voice Report 経由（SPA媒体の逆引き）
+    # 各企業が自社サイトで「掲載されました」と告知しているページを検索で発見する
+    S2_VOICE_REPORT_QUERIES = [
+        "アクサ生命 Voice Report 掲載 株式会社",
+        "アクサ生命 Voice Report 取材 株式会社",
+        "アクサ生命 Voice Report インタビュー 代表",
+        "アクサ生命 ボイスレポート 掲載 株式会社",
+        "アクサ生命 健康経営 Voice Report 株式会社",
+        "アクサ生命 健康経営アクサ式 掲載 株式会社",
+        "アクサ 健康経営 Voice Report 代表取締役",
+        "アクサ生命 Voice Report 取材いただきました",
+        "アクサ生命 Voice Report 紹介されました",
+        "アクサ生命 健康経営 取材 代表取締役 株式会社",
+    ]
+    queries.extend(S2_VOICE_REPORT_QUERIES)
+
+    # 12. S2: 大同生命 DAIDO KENCO AWARD 経由（SPA媒体の逆引き）
+    S2_DAIDO_QUERIES = [
+        "DAIDO KENCO AWARD 受賞 株式会社",
+        "DAIDO KENCO AWARD 認定 代表取締役",
+        "大同生命 KENCO AWARD 受賞 株式会社",
+        "大同生命 KENCO AWARD 掲載 株式会社",
+        "大同生命 健康経営 AWARD 株式会社",
+        "大同生命 健康経営 受賞 代表取締役",
+        "大同生命 KENCO 認定企業 株式会社",
+        "大同生命 健康経営 表彰 株式会社",
+        "DAIDO KENCO 受賞しました 株式会社",
+        "大同生命 健康経営アワード 株式会社",
+    ]
+    queries.extend(S2_DAIDO_QUERIES)
+
+    # 13. ターゲット属性直撃クエリ（業種 × 健康経営優良法人 × 都道府県）
+    TARGET_INDUSTRIES = ["IT企業", "コンサルティング", "製造業"]
+    try:
+        from config import SEARCH_REGIONS
+        for industry in TARGET_INDUSTRIES:
+            for region in SEARCH_REGIONS:
+                queries.append(f"{industry} 健康経営優良法人 {region}")
     except ImportError:
         pass
 
