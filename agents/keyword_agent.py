@@ -176,9 +176,12 @@ PRIORITY_PREFECTURES = ["東京都", "大阪府", "愛知県", "神奈川県", "
 S2_QUERY_MARKERS: list[str] = [
     "Voice Report",
     "ボイスレポート",
+    "アクサ生命",           # アクサ生命関連クエリを全カバー
+    "アクサ式",             # 健康経営アクサ式パターン
     "DAIDO KENCO",
     "大同生命 KENCO",
     "大同生命 健康経営アワード",
+    "大同生命",             # 大同生命関連クエリを全カバー
 ]
 
 
@@ -190,6 +193,17 @@ def is_s2_media_query(query: str) -> bool:
 # ===== Phase 3.3 学習システム拡張 =====
 STATS_VERSION = "2.0"
 DEFAULT_SOURCE = "search"  # source未指定時のデフォルト
+
+
+def normalize_query_key(query: str) -> str:
+    """stats 検索・書き込み時にクエリから NG suffix を除去した基本部分を返す。
+
+    NG suffix 付きクエリ（新形式）と suffix なしクエリ（旧形式）が
+    同一の stats エントリを共有するための正規化。
+    """
+    if query.endswith(NG_INDUSTRY_SUFFIX):
+        return query[:-len(NG_INDUSTRY_SUFFIX)]
+    return query
 
 
 def is_dead_query(stats: dict) -> bool:
@@ -411,6 +425,7 @@ def _get_query_data(stats: dict, query: str) -> dict:
     """v2形式の stats から指定クエリのデータを取得（なければ初期化）."""
     if "queries" not in stats:
         stats["queries"] = {}
+    query = normalize_query_key(query)  # NG suffix を除去して旧データと同一キーで管理
     if query not in stats["queries"]:
         stats["queries"][query] = {
             "total_hits": 0, "runs": 0, "avg_hits": 0.0,
@@ -472,9 +487,10 @@ def record_ng(query: str, source: str = None):
     if source is None:
         source = DEFAULT_SOURCE
     stats = load_stats()
-    if "queries" not in stats or query not in stats["queries"]:
+    nkey = normalize_query_key(query)
+    if "queries" not in stats or nkey not in stats["queries"]:
         return
-    qd = stats["queries"][query]
+    qd = stats["queries"][nkey]
 
     # クエリ全体（既存と同じ）
     qd["ng_count"] = qd.get("ng_count", 0) + 1
@@ -572,7 +588,7 @@ def get_sorted_queries(
         for q in all_queries:
             if q in custom_set:
                 filtered.append(q)
-            elif not is_dead_query(stats.get(q, {})):
+            elif not is_dead_query(stats.get(normalize_query_key(q), {})):
                 filtered.append(q)
             else:
                 excluded_count += 1
@@ -586,7 +602,7 @@ def get_sorted_queries(
         if q in custom_set:
             return (0, 0, 0, 0)  # カスタムは最優先
 
-        s = stats.get(q)
+        s = stats.get(normalize_query_key(q))
         if not s:
             return (3, 0, 0, 0)  # 未実績: 中優先（生成順）
 
