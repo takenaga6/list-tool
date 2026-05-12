@@ -151,6 +151,9 @@ def _clean_company_name(name: str) -> str:
     name = _remove_noise_phrases(name)
     name = _truncate_at_separator(name)
     name = _dedupe_consecutive(name)
+    # 末尾の「 -」「-」を除去（HTMLタイトルテンプレートの残骸）
+    # 社名中ハイフン「A-B商事」は $ アンカーにより保護される
+    name = re.sub(r"[\s　]*-[\s　]*$", "", name).strip()
     if not name:
         return ""
     if _NAME_CONJUNCTION.search(name):
@@ -509,13 +512,17 @@ def extract_company_name_from_media_page(soup: BeautifulSoup, text: str) -> str:
         for pattern in COMPANY_NAME_PATTERNS:
             match = re.search(pattern, tag_text)
             if match:
-                return match.group(1).strip()[:40]
+                cleaned = _clean_company_name(match.group(1).strip()[:40])
+                if cleaned:
+                    return cleaned
 
     # テキスト全体から企業名パターンを探す（先頭1500文字）
     for pattern in COMPANY_NAME_PATTERNS:
         match = re.search(pattern, text[:1500])
         if match:
-            return match.group(1).strip()[:40]
+            cleaned = _clean_company_name(match.group(1).strip()[:40])
+            if cleaned:
+                return cleaned
 
     return ""
 

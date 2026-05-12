@@ -230,6 +230,31 @@ class TestCleanCompanyName:
         # （エラーで落ちないことが最低条件）
         assert isinstance(result, str)
 
+    # ── 末尾ハイフン除去（Phase0a C2-v2 追加）──
+    def test_trailing_hyphen_with_space(self):
+        """5/9走行で発覚した「Goistech -」パターン: 末尾「 -」を除去"""
+        assert _clean_company_name("Goistech -") == "Goistech"
+
+    def test_trailing_hyphen_no_space(self):
+        """末尾「-」（スペースなし）も除去"""
+        assert _clean_company_name("Test-") == "Test"
+
+    def test_trailing_hyphen_fullwidth_space(self):
+        """末尾「　-」（全角スペース+ハイフン）も除去"""
+        assert _clean_company_name("ABC社　-") == "ABC社"
+
+    def test_trailing_hyphen_with_legal_form(self):
+        """法人格付きの末尾「 -」も除去"""
+        assert _clean_company_name("株式会社Goistech -") == "株式会社Goistech"
+
+    def test_hyphen_in_middle_preserved(self):
+        """社名中ハイフン「A-B-C商事」は除去しない"""
+        assert _clean_company_name("株式会社A-B-C商事") == "株式会社A-B-C商事"
+
+    def test_hyphen_between_content_preserved(self):
+        """「A-B商事」の途中ハイフンも保持（既存テストと重複確認）"""
+        assert _clean_company_name("株式会社A-B商事") == "株式会社A-B商事"
+
     # ── 既存ロジックとの共存確認 ──
     def test_conjunction_still_excluded(self):
         # 既存: 「及び」を含む → 空文字

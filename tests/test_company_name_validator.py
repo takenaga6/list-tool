@@ -68,8 +68,22 @@ class TestIsValidCompanyName:
         assert _is_valid_company_name("会社名？不明") is False
 
     def test_invalid_comma(self):
-        """読点を含む → False"""
+        """読点（U+3001）を含む → False"""
         assert _is_valid_company_name("株式会社、テスト") is False
+
+    def test_invalid_fullwidth_comma(self):
+        """全角カンマ U+FF0C「，」を含む → False（文字コード違い対策）"""
+        assert _is_valid_company_name("株式会社，テスト") is False
+
+    def test_invalid_halfwidth_comma(self):
+        """半角カンマ U+002C「,」を含む → False（文字コード違い対策）"""
+        assert _is_valid_company_name("株式会社,テスト") is False
+
+    def test_invalid_pattern1_real_case(self):
+        """5/9走行で発覚したパターン1の実例: 読点含む長文 → False"""
+        assert _is_valid_company_name(
+            "株式会社東豊精工は、1957年（昭和32年）コウノトリ舞う豊かな自然"
+        ) is False
 
     # ── ルール2: 法人格の直後が助詞 ──────────────────────────────────────
     def test_invalid_legal_form_followed_by_no(self):

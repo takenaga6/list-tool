@@ -1,6 +1,45 @@
 import unittest
+from unittest.mock import MagicMock
 
 from agents import scraper_agent
+from agents.scraper_agent import extract_company_name_from_media_page
+
+
+class TestExtractCompanyNameFromMediaPage(unittest.TestCase):
+    """extract_company_name_from_media_page が _clean_company_name を経由することを確認"""
+
+    def _make_soup_with_h1(self, text: str):
+        from bs4 import BeautifulSoup
+        html = f"<html><body><h1>{text}</h1></body></html>"
+        return BeautifulSoup(html, "html.parser")
+
+    def test_valid_name_returned(self):
+        """正常な会社名はそのまま返す"""
+        soup = self._make_soup_with_h1("株式会社テスト")
+        result = extract_company_name_from_media_page(soup, "株式会社テスト")
+        assert result == "株式会社テスト"
+
+    def test_pattern1_real_case_filtered(self):
+        """5/9走行で発覚したパターン1: 「、」含む長文はバリデーションで除外される"""
+        text = "株式会社東豊精工は、1957年（昭和32年）コウノトリ舞う豊かな自然"
+        soup = self._make_soup_with_h1(text)
+        result = extract_company_name_from_media_page(soup, text)
+        assert result == ""
+
+    def test_fullwidth_comma_filtered(self):
+        """全角カンマ「，」含む文字列も除外される"""
+        text = "株式会社テスト，詳しくはこちら"
+        soup = self._make_soup_with_h1(text)
+        result = extract_company_name_from_media_page(soup, text)
+        assert result == ""
+
+    def test_text_fallback_also_filtered(self):
+        """h1/h2にマッチなし・テキストフォールバックでも _clean_company_name が効く"""
+        text = "株式会社東豊精工は、1957年（昭和32年）コウノトリ舞う豊かな自然"
+        soup = MagicMock()
+        soup.find_all.return_value = []
+        result = extract_company_name_from_media_page(soup, text)
+        assert result == ""
 
 
 class TestScraperAgent(unittest.TestCase):

@@ -24,7 +24,9 @@ def _is_valid_company_name(name: str) -> bool:
         return False
 
     # ルール1: 句読点・感嘆符を含む（商業登記規則5条により商号に使用不可）
-    if any(c in name for c in "！？。、"):
+    # U+3001「、」に加え、全角カンマ U+FF0C「，」と半角カンマ U+002C「,」も除外
+    # （HTMLソースが異なるコードポイントのカンマを使っている場合の文字コード違い対策）
+    if any(c in name for c in "！？。、，,"):
         return False
 
     # ルール2: 法人格の直後が助詞（「株式会社の登録商標」等のパターン）
