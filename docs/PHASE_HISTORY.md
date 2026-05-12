@@ -1003,3 +1003,73 @@ Phase 6 系の効果確認:
 - メディアベースのクエリ戦略では、中小ターゲット企業を効率よく発見できない
 
 **結論**: Phase 7 として戦略の根本見直しが必要。
+
+---
+
+## Phase 7-B C2: 会社名バリデーション強化（2026-05-09）
+
+### 背景
+
+ドライラン走行で「ばねのこと…」「株式会社の登録商標です。」等の文章的な文字列が
+会社名として登録されていることが発覚。
+
+### 対応内容
+
+`utils/company_name_validator.py` に `_is_valid_company_name()` を新設。
+`_clean_company_name()` の最後で呼び出す。
+
+| ルール | 内容 |
+|---|---|
+| ルール1 | 句読点・感嘆符を含む（`！？。、`）→ False |
+| ルール2 | 法人格の直後が助詞（「株式会社の〜」）→ False |
+| ルール3 | 助詞が4個以上（文章的な文字列）→ False |
+
+---
+
+## Phase 0a C2-v2: 会社名抽出の追加バグ修正（2026-05-12）
+
+### 背景
+
+5/9 走行で Phase 7-B C2 を回避した新たな3パターンが発覚。
+
+### 修正内容
+
+**パターン2対応: 末尾ハイフン除去**（`agents/scraper_agent.py` `_clean_company_name`）
+
+`_dedupe_consecutive` の直後に以下を追加。  
+`_NAME_SEP_CHARS` の `[ 　]+-[ 　]+` はハイフン両側にスペースが必要で
+末尾 ` -` を処理できなかったため、`$` アンカーで末尾限定除去。
+
+```python
+name = re.sub(r"[\s　]*-[\s　]*$", "", name).strip()
+```
+
+社名中ハイフン（`A-B商事`）は `$` アンカーにより保護される。
+
+**パターン1対応A: バイパス塞ぎ**（`agents/scraper_agent.py` `extract_company_name_from_media_page`）
+
+旧ロジックは `match.group(1).strip()[:40]` を直接 return しており、
+`_clean_company_name`・`_is_valid_company_name` を経由しないバイパスが存在した。
+
+修正後: `_clean_company_name` を経由し、空文字（validation NG）の場合は
+次のパターン or 次のタグを試す。元の即 return は空文字を返してしまう問題もあった。
+
+```python
+cleaned = _clean_company_name(match.group(1).strip()[:40])
+if cleaned:
+    return cleaned
+```
+
+**パターン1対応C: 文字コード違いカンマ対策**（`utils/company_name_validator.py` ルール1）
+
+HTMLソースが `，`（U+FF0C 全角カンマ）や `,`（U+002C 半角カンマ）を使う場合、
+既存の `、`（U+3001）チェックでは素通りする。チェック対象を拡張。
+
+```python
+if any(c in name for c in "！？。、，,"):
+```
+
+### 未対応（別タスク）
+
+パターン3（「東京海上あんしんエージェンシー（あんしん生命の100%子会社）」等の
+大企業子会社検出）は `rank_agent` 強化で対応予定。
