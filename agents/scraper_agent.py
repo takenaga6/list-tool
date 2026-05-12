@@ -246,14 +246,12 @@ def check_company_fields(all_text: str) -> tuple[bool, list[str]]:
     除外条件:
       - 「運営会社」の記載あり → サービスサイト（SaaS等）であり企業HPではない
 
-    マスト5項目（トップページ記載でもOK）:
-      ① 法人格（株式会社/合同会社/有限会社）
-      ② 代表取締役 / 代表者
-      ③ 事業内容 / Company / About / 企業情報 など
-      ④ 〒住所 または 都道府県+市区町村
-      ⑤ TEL / 電話番号
-
-    5項目中3つ以上あれば企業HPと判定。
+    必須項目（Phase 0a C1 改定）:
+      ① 従業員数（ハード必須）
+      ② TEL / 電話番号（ハード必須。架電可能性の担保）
+      ③ 法人格（株式会社/合同会社/有限会社）← 以下いずれか1件以上
+      ④ 事業内容 / Company / About / 企業情報 など
+      （代表者・住所は必須から除外。HP項目緩和により登録件数向上を図る）
 
     Returns:
         (is_company_page, missing_fields_list)
@@ -277,30 +275,32 @@ def check_company_fields(all_text: str) -> tuple[bool, list[str]]:
     ):
         return False, ["上場/IR情報あり"]
 
+    # 従業員数: ハード必須（200名以下判定で使用）
+    employee_count = extract_employee_count(all_text)
+    if not employee_count:
+        return False, ["従業員数"]
+
+    # TEL: ハード必須（架電可能性の担保。電話番号が抽出できなければ事業価値ゼロ）
+    # 「電話」単体・「tel.」小文字を追加（Phase 0a C1 で拡張）
+    if not re.search(
+        r"TEL|電話番号|電話|Tel\.|tel\.|0\d{1,4}[-－ー]\d{2,4}[-－ー]\d{3,4}",
+        all_text,
+    ):
+        return False, ["TEL"]
+
+    # 柔軟チェック: 法人格 or 事業内容のどちらか1件以上（代表者・住所は不問）
     checks = {
         "法人格":   bool(re.search(r"株式会社|合同会社|有限会社|一般社団法人", all_text)),
-        "代表者":   bool(re.search(r"代表取締役|代表者|社長\s*[：:]|CEO\s*[：:]|President", all_text)),
         "事業内容": bool(re.search(
             r"事業内容|サービス内容|主な事業|業務内容|企業情報|会社情報|会社概要"
             r"|Company|About\s*Us|Our\s*Business|About\s*Company",
             all_text
         )),
-        "住所":     bool(re.search(r"〒\s*\d{3}[-ー]\d{4}|[^\s]{2,4}[都道府県][^\s]{2,6}[市区町村]", all_text)),
-        "TEL":      bool(re.search(r"TEL|電話番号|Tel\.|0\d{1,4}[-－ー]\d{2,4}[-－ー]\d{3,4}", all_text)),
     }
-
-    # 従業員数が記載されていない企業はリストアップ対象外
-    # ※求人サイト等で「100名以上」といった曖昧表現だけのケースも除外
-    employee_count = extract_employee_count(all_text)
-    if not employee_count:
-        missing = ["従業員数"]
-        # 既存のチェック不足と組み合わせる
-        missing += [k for k, v in checks.items() if not v]
-        return False, missing
 
     missing = [k for k, v in checks.items() if not v]
     present_count = sum(checks.values())
-    is_company = present_count >= 3
+    is_company = present_count >= 1  # 法人格 or 事業内容のどちらか1件
     return is_company, missing
 
 

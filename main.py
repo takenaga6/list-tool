@@ -648,10 +648,8 @@ def process_one_company(
 
         score = rank_result["score"]
         confidence = company_info.get("_confidence", 0)
-        # pending リスト追加の最低条件（会社名＋電話or住所）
-        has_min_fields = bool(company_info.get("company_name")) and (
-            bool(company_info.get("phone")) or bool(company_info.get("address"))
-        )
+        # pending リスト追加の最低条件（会社名＋電話番号: Phase 0a C1 で住所条件を除外）
+        has_min_fields = bool(company_info.get("company_name")) and bool(company_info.get("phone"))
         # 自動登録の必須条件（会社名＋URLがあればOK、電話・従業員数は任意）
         has_auto_fields = (
             bool(company_info.get("company_name"))
@@ -1060,7 +1058,7 @@ def update_overview_docs():
 
 **自動登録・スキップ閾値:**
 - スコア **{MIN_REGISTER_SIGNALS}点以上** かつ **必須フィールド（会社名・URL）全揃い** → 自動登録
-- スコア **{MIN_REGISTER_SIGNALS}点未満** または pending最低条件（会社名＋電話or住所）不足 → 候補リストにも出さず自動スキップ
+- スコア **{MIN_REGISTER_SIGNALS}点未満** または pending最低条件（会社名＋電話番号）不足 → 候補リストにも出さず自動スキップ
 - 上記以外（中間スコア or フィールド不足） → `pending_review.json` に蓄積して確認待ち"""
 
     # ── マーカー置換 ──────────────────────────────────────────────
