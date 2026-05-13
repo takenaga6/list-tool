@@ -1403,10 +1403,10 @@ def run_batch(
 
         # ─── ② キーワード検索 ─────────────────────────────────────
         if stats["success"] < target_count and query_list:
-            # Phase 3.1: 期間の組み合わせ爆発を防ぐため、periodsの最初の1個のみ使用
-            # （8期間 × 2803クエリ = 22424検索 → 2803検索に削減）
-            # 学習データが溜まったら Phase 3.3 で動的選択する
-            periods_to_use = periods[:1] if periods else periods
+            # ユーザーが選択した全期間を順次実行
+            # 各期間で検索エンジンが異なる結果を返すため、複数期間を回すことで結果の多様性が増す
+            # 目標件数達成で早期終了するため、組み合わせ爆発は実運用上問題にならない
+            periods_to_use = periods
             search_tasks = [
                 (keyword, lbl, tbs) for keyword in query_list for lbl, tbs in periods_to_use
             ]
