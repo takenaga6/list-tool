@@ -169,6 +169,7 @@ RECRUIT_SUFFIXES = [
 NG_SKIP_THRESHOLD = 0.9   # NG率90%以上のクエリは末尾に回す
 MIN_RUNS_FOR_NG_CHECK = 3  # 最低3回実行後に判定
 A_RATE_THRESHOLD = 0.05   # A率5%未満かつ5回以上実行済み → 降格
+AB_RATE_HIGH_QUALITY_THRESHOLD = 0.05  # ab_rateがこれ以上なら高品質クエリとして優先（グループ2）
 
 # ===== Phase 6.7B: 履歴ない媒体の初回試行用・主要5都道府県 =====
 PRIORITY_PREFECTURES = ["東京都", "大阪府", "愛知県", "神奈川県", "福岡県"]
@@ -214,12 +215,20 @@ def is_dead_query(stats: dict) -> bool:
     判定基準:
     - 試行3回以上 かつ ヒット数0 → 死んでいる
     - 試行5回以上 かつ ヒット率5%未満 → 効率悪すぎ
+    - 試行5回以上 かつ URLはヒットするが処理済み企業のA/B実績ゼロ → 質的に無価値
+      （ng_count > 0 を要求: URLは見つかったが実際に処理して全NGの状態）
     """
     runs = stats.get("runs", 0)
     total_hits = stats.get("total_hits", 0)
     if runs >= 3 and total_hits == 0:
         return True
     if runs >= 5 and total_hits / runs < 0.05:
+        return True
+    if (runs >= 5
+            and total_hits > 0
+            and stats.get("a_rank", 0) == 0
+            and stats.get("b_rank", 0) == 0
+            and stats.get("ng_count", 0) > 0):
         return True
     return False
 
@@ -632,8 +641,10 @@ def get_sorted_queries(
         if a_rank > 0:
             return (1, -a_rate, -a_rank, -ab_rate)  # Aランクあり: A率→件数順
 
+        if ab_rate >= AB_RATE_HIGH_QUALITY_THRESHOLD:
+            return (2, -ab_rate, -avg_hits, 0)  # 高品質AB（5%以上）: グループ2
         if ab_rate > 0:
-            return (2, -ab_rate, -avg_hits, 0)  # B率あり
+            return (3, -ab_rate, -avg_hits, 0)  # 低AB率（5%未満）: グループ3に降格
 
         return (3, -avg_hits, 0, 0)  # ヒットのみ
 
