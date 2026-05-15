@@ -222,7 +222,7 @@ def _record_rejected_url(url: str, title: str, snippet: str, query: str, reason:
 
 def _fetch_hits_google_cse(query: str, tbs: str, num: int) -> list[dict]:
     """
-    Google Custom Search APIでヒットを取得する。
+    Google Custom Search APIでヒットを取得する（最大3ページ = 30件）。
     APIキー未設定またはエラー時は空リストを返す。
     """
     from config import GOOGLE_CSE_API_KEY, GOOGLE_CSE_CX
@@ -239,39 +239,61 @@ def _fetch_hits_google_cse(query: str, tbs: str, num: int) -> list[dict]:
         "qdr:m9": "m9",
         "qdr:y":  "y1",
     }
-    params = {
+    base_params = {
         "key": GOOGLE_CSE_API_KEY,
         "cx": GOOGLE_CSE_CX,
         "q": query,
         "lr": "lang_ja",
         "gl": "jp",
-        "num": min(num * 2, 10),
+        "num": 10,  # Google CSE の1ページあたりのハード上限
     }
     dr = date_restrict_map.get(tbs)
     if dr:
-        params["dateRestrict"] = dr
-    try:
-        resp = requests.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params=params,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            logger.debug(f"Google CSE APIエラー: {resp.status_code}")
-            return []
-        items = resp.json().get("items", [])
-        # DuckDuckGo形式に統一
-        return [
-            {
-                "href": item.get("link", ""),
-                "title": item.get("title", ""),
-                "body": item.get("snippet", ""),
-            }
-            for item in items if item.get("link")
-        ]
-    except Exception as e:
-        logger.debug(f"Google CSE例外: {e}")
-        return []
+        base_params["dateRestrict"] = dr
+
+    all_items: list[dict] = []
+    seen_urls: set[str] = set()
+
+    for start in range(1, 31, 10):  # 1, 11, 21 の3ページ
+        params = {**base_params, "start": start}
+        try:
+            resp = requests.get(
+                "https://www.googleapis.com/customsearch/v1",
+                params=params,
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                logger.debug(f"Google CSE APIエラー: {resp.status_code} (start={start})")
+                break  # エラー時はそこで打ち切り
+            items = resp.json().get("items", [])
+            logger.info(
+                f"Google CSE ページネーション: query='{query[:50]}', "
+                f"start={start}, items={len(items)}件"
+            )
+            if not items:
+                break  # 結果0件 = ページ終端 → 早期終了
+            # seen_urls 更新前に重複数を計算（debug ログ用）
+            if start > 1:
+                duplicates = sum(1 for i in items if i.get("link") in seen_urls)
+                if duplicates > 0:
+                    logger.debug(f"Google CSE 重複除外: {duplicates}件 (start={start})")
+            for item in items:
+                link = item.get("link", "")
+                if link and link not in seen_urls:
+                    seen_urls.add(link)
+                    all_items.append({
+                        "href": link,
+                        "title": item.get("title", ""),
+                        "body": item.get("snippet", ""),
+                    })
+        except Exception as e:
+            logger.debug(f"Google CSE例外: {e} (start={start})")
+            break  # 例外時も打ち切り
+
+        if start < 21:  # 最終ページ以外はページ間スリープ
+            time.sleep(1.5)
+
+    return all_items
 
 
 def _fetch_hits_ddgs(query: str, tbs: str, num: int) -> list[dict]:
