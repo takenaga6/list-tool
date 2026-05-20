@@ -218,5 +218,114 @@ class TestEvaluateRankIntegration(unittest.TestCase):
         self.assertIn("Phase1必須条件NG", result["ng_reason"])
 
 
+# プライム子会社キーワードを含む標準HP本文（健康経営・採用・福利厚生あり）
+_PRIME_SUB_PAGE_TEXT = (
+    _STD_PAGE_TEXT
+    + " 当社は東証プライム上場の親会社のもとで事業を展開する子会社です。"
+)
+
+
+class TestPrimeSubsidiaryException(unittest.TestCase):
+    """プライム子会社例外通過ロジックのテスト（pre_screen / evaluate_rank）。
+
+    fix/prime-subsidiary-exception ブランチで追加した例外処理を検証する。
+    設計根拠: アウトバウンド営業では「親の信用力×子会社の意思決定距離の近さ」で
+    プライム子会社のみ上場規模例外を認める。
+    """
+
+    # a. pre_screen: スニペットに上場キーワードがあっても、プライム子会社判定で通過する
+    def test_a_pre_screen_prime_sub_skips_stock_keyword(self):
+        result, reason = pre_screen({
+            "url": "https://example.co.jp/",
+            "title": "株式会社サンプルサービス",
+            "snippet": "東証プライム上場の親会社のもとで事業展開。従業員60名。",
+        })
+        self.assertTrue(result, f"プライム子会社が上場キーワードでNGになった: {reason}")
+
+    # b. pre_screen: タイトルにグループ会社キーワードがあっても、プライム子会社判定で通過する
+    def test_b_pre_screen_prime_sub_skips_group_keyword(self):
+        result, reason = pre_screen({
+            "url": "https://example.co.jp/",
+            "title": "サンプルグループ会社 株式会社テスト",
+            "snippet": "東証プライム上場の三井物産の子会社。従業員80名。",
+        })
+        self.assertTrue(result, f"プライム子会社がグループ会社キーワードでNGになった: {reason}")
+
+    # c. pre_screen: 上場キーワードあり + プライム子会社キーワードなし → NG（上場企業）
+    def test_c_pre_screen_non_prime_stock_keyword_ng(self):
+        result, reason = pre_screen({
+            "url": "https://example.co.jp/",
+            "title": "株式会社サンプル",
+            "snippet": "東証スタンダード上場企業。従業員60名。",
+        })
+        self.assertFalse(result)
+        self.assertIn("上場企業", reason)
+
+    # d. evaluate_rank: プライム子会社 + 従業員600名 → 通過（500名以上の例外が機能）
+    def test_d_evaluate_rank_prime_sub_600_passes(self):
+        page_text = _PRIME_SUB_PAGE_TEXT + " 従業員600名。"
+        company_info = {
+            "company_name": "サンプルサービス株式会社",
+            "industry": "IT",
+            "employee_count": "600",
+        }
+        result = evaluate_rank(
+            company_info,
+            [{"url": "", "title": "", "snippet": "", "search_query": ""}],
+            page_text=page_text,
+        )
+        self.assertNotEqual(result["rank"], "NG",
+                            f"プライム子会社600名がNGになった: {result['ng_reason']}")
+
+    # e. evaluate_rank: 非プライム子会社 + 従業員600名 → NG（大規模・非プライム）
+    def test_e_evaluate_rank_non_prime_600_ng(self):
+        company_info = {
+            "company_name": "株式会社サンプル",
+            "industry": "IT",
+            "employee_count": "600",
+        }
+        result = evaluate_rank(
+            company_info,
+            [{"url": "", "title": "", "snippet": "", "search_query": ""}],
+            page_text=_STD_PAGE_TEXT,
+        )
+        self.assertEqual(result["rank"], "NG")
+        self.assertIn("大規模・非プライム子会社", result["ng_reason"])
+
+    # f. evaluate_rank: プライム子会社 + 従業員250名（空白帯）→ NG（空白帯は全員NG）
+    def test_f_evaluate_rank_prime_sub_blank_zone_ng(self):
+        page_text = _PRIME_SUB_PAGE_TEXT + " 従業員250名。"
+        company_info = {
+            "company_name": "サンプルサービス株式会社",
+            "industry": "IT",
+            "employee_count": "250",
+        }
+        result = evaluate_rank(
+            company_info,
+            [{"url": "", "title": "", "snippet": "", "search_query": ""}],
+            page_text=page_text,
+        )
+        self.assertEqual(result["rank"], "NG")
+        self.assertIn("空白帯", result["ng_reason"])
+
+    # g. evaluate_rank: full_text に「東証プライム市場」を含む上場キーワードがあっても
+    #    プライム子会社ならNG扱いにならない
+    def test_g_evaluate_rank_prime_sub_with_stock_text_passes(self):
+        page_text = _PRIME_SUB_PAGE_TEXT + " 従業員60名。"
+        company_info = {
+            "company_name": "三井物産サービス株式会社",
+            "industry": "IT",
+            "employee_count": "60",
+        }
+        # スニペットに「東証プライム市場」を含めてもプライム子会社なので通過する
+        result = evaluate_rank(
+            company_info,
+            [{"url": "", "title": "東証プライム市場上場グループ企業", "snippet": "", "search_query": ""}],
+            page_text=page_text,
+        )
+        self.assertNotEqual(result["rank"], "NG",
+                            f"プライム子会社が上場キーワードでNGになった: {result['ng_reason']}")
+
+
 if __name__ == "__main__":
     unittest.main()
