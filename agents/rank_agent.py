@@ -1,6 +1,22 @@
 """
 ランク判定エージェント（v2）
 
+【このツールの用途とNGロジックの前提】
+  本ツールはアウトバウンド営業（テレアポ・DM）用のリスト生成ツール。
+  営業アプローチの到達可能性に基づき、以下の方針でNG/OK を決定する：
+
+  - 上場企業（本体）は規模を問わずNG:
+      上場企業は購買窓口到達のハードルが高く（受付→秘書→担当部署の複数経路が必要）、
+      アウトバウンドでは事実上アプローチ不可能。
+  - 東証プライム上場企業の子会社（is_prime_sub=True）は例外通過:
+      親会社の信用力を持ちつつ、子会社は意思決定者（社長・役員）への距離が近く、
+      アウトバウンドで届く確率が高い。
+  - マーケティング流入・紹介経由の企業はこのロジックの対象外:
+      本ツールはアウトバウンドのリストのみを生成する。
+
+  ※ is_prime_sub の判定は config.py の PARENT_PRIME_KEYWORDS によるキーワードマッチ。
+    スクレイプしたHP本文に「東証プライム上場の〇〇の子会社」等が含まれる場合に True。
+
 【設計方針】
   S1（PR有料媒体掲載）またはS2（健康経営メディア掲載）に該当した時点でBランク確定。
   追加シグナル（S3〜S6）が2つ以上あればAランク。
@@ -134,8 +150,15 @@ def pre_screen(search_result: dict) -> tuple[bool, str]:
     snippet = search_result.get("snippet", "") or ""
     text    = title + " " + snippet
 
+    # プライム子会社候補をスニペット段階で先に判定する（案③）。
+    # HP本文がないため PARENT_PRIME_KEYWORDS（厳格化済み）でのみマッチする。
+    # True の場合、以降の「上場キーワード」「グループ会社」チェックをスキップし
+    # HP取得後の evaluate_rank() での精密判定に委ねる。
+    _maybe_prime_sub = any(kw in text for kw in PARENT_PRIME_KEYWORDS)
+
     # ① 上場・大規模グループチェック
-    if re.search(r"東証|上場企業|証券コード|プライム市場|スタンダード市場|グロース市場|TSE:|NYSE:|NASDAQ:", text):
+    # プライム子会社候補はスキップ（evaluate_rank で is_prime_sub を再判定する）
+    if not _maybe_prime_sub and re.search(r"東証|上場企業|証券コード|プライム市場|スタンダード市場|グロース市場|TSE:|NYSE:|NASDAQ:", text):
         return False, "上場企業"
 
     domain = urlparse(url).netloc.replace("www.", "").lower()
@@ -148,7 +171,8 @@ def pre_screen(search_result: dict) -> tuple[bool, str]:
 
     if re.search(r"ホールディングス|Holdings|ホールディング\b", title):
         return False, "ホールディングス（大規模企業）"
-    if re.search(r"GROUP|グループ会社|グループ子会社|\bグループ\b.*\b会社", title):
+    # プライム子会社候補はスキップ（evaluate_rank で is_prime_sub を再判定する）
+    if not _maybe_prime_sub and re.search(r"GROUP|グループ会社|グループ子会社|\bグループ\b.*\b会社", title):
         return False, "大手グループ企業"
 
     # ② 従業員数（スニペットに明記されている場合）
@@ -290,8 +314,13 @@ def evaluate_rank(
     )
     full_text = all_search_text + " " + page_text + " " + company_info.get("company_name", "")
 
+    # HP本文を含む full_text が揃った時点でプライム子会社を精密判定する。
+    # pre_screen の _maybe_prime_sub より信頼性が高い（HP本文ベース）。
+    _is_prime_sub = is_parent_prime_subsidiary(full_text)
+
     # ─── NG判定 ───────────────────────────────────────
-    if re.search(r"東証|上場企業|TSE|NYSE|NASDAQ|証券コード|プライム市場|スタンダード市場|グロース市場", full_text):
+    # プライム子会社はアウトバウンドで届く（親の信用力×子会社の意思決定距離）ため例外通過。
+    if not _is_prime_sub and re.search(r"東証|上場企業|TSE|NYSE|NASDAQ|証券コード|プライム市場|スタンダード市場|グロース市場", full_text):
         return _ng("上場企業")
 
     company_name = company_info.get("company_name", "")
@@ -303,12 +332,17 @@ def evaluate_rank(
             return _ng(f"NG業種: {ng_kw}")
 
     # 従業員数NG（scraper抽出値優先）
+    # 200-499名は空白帯（プライム子会社も含め全員NG）。
+    # 500名以上はプライム子会社のみ通過（非プライムはアウトバウンド不可）。
+    cfg = EMPLOYEE_RANGE_CONFIG
     emp_raw = company_info.get("employee_count", "")
     if emp_raw:
         try:
             emp_n = int(re.sub(r"\D", "", str(emp_raw)))
-            if emp_n > 200:
-                return _ng(f"従業員{emp_n}名（200名超）")
+            if cfg["blank_zone_min"] <= emp_n <= cfg["blank_zone_max"]:
+                return _ng(f"従業員{emp_n}名（空白帯）")
+            if emp_n >= cfg["large_min"] and not _is_prime_sub:
+                return _ng(f"従業員{emp_n}名（大規模・非プライム子会社）")
             if emp_n < 10:
                 return _ng(f"従業員{emp_n}名（下限未満）")
         except ValueError:
@@ -317,8 +351,10 @@ def evaluate_rank(
     emp_m = re.search(r"(?:従業員[数人]?|社員[数人]?|スタッフ[数人]?)\s*[：:\s]*(\d+)\s*名?", full_text)
     if emp_m:
         count = int(emp_m.group(1))
-        if count > 200:
-            return _ng(f"従業員{count}名（200名超）")
+        if cfg["blank_zone_min"] <= count <= cfg["blank_zone_max"]:
+            return _ng(f"従業員{count}名（空白帯）")
+        if count >= cfg["large_min"] and not _is_prime_sub:
+            return _ng(f"従業員{count}名（大規模・非プライム子会社）")
         if count < 10:
             return _ng(f"従業員{count}名（下限未満）")
 
