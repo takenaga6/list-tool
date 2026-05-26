@@ -29,3 +29,9 @@ data/*.csv
 # 一時ログファイル
 cleanup_log*.txt
 *.log
+
+# Claude Code ローカル設定
+.claude/
+
+# バックアップ（_区切りパターン）
+*.bak_*
