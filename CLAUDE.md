@@ -88,8 +88,8 @@ check_phase1_must_conditions、config.py のキーワード定義・スコアリ
 3. 該当コミットハッシュ（短縮形7桁でよい）が "Live" になっていることを目視確認
 4. 走行観察期間のカウントは「Live になった時刻」が起点
 
-push を忘れたまま「走行観察中」とみなす事故が 2026-05-25 に発生済み。
-PHASE_HISTORY.md の 2026-05-25 エントリ参照。
+push 後の Render デプロイ反映確認を失念し、走行観察期間が実態ゼロになる事故が 2026-06-03 に発覚。
+PHASE_HISTORY.md の 2026-06-03 エントリ参照。
 
 ### このルールの背景
 2026-05-20 の fix/prime-subsidiary-exception PR で、プライム子会社の
