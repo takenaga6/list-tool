@@ -171,6 +171,11 @@ MIN_RUNS_FOR_NG_CHECK = 3  # 最低3回実行後に判定
 A_RATE_THRESHOLD = 0.05   # A率5%未満かつ5回以上実行済み → 降格
 AB_RATE_HIGH_QUALITY_THRESHOLD = 0.05  # ab_rateがこれ以上なら高品質クエリとして優先（グループ2）
 
+# 復活間隔（日）: 死んだクエリも last_run がこの日数以上前なら1回だけ再挑戦させる。
+# Google検索結果は時間で変わる（新規認定企業が増える）ため、死亡を一方通行にしない。
+# 2026-06-04: 旧・判定3（A/B無→永久死）でクエリ2630/2970件が壊滅したことを受けて導入。
+RECOVERY_DAYS = 30
+
 # ===== Phase 6.7B: 履歴ない媒体の初回試行用・主要5都道府県 =====
 PRIORITY_PREFECTURES = ["東京都", "大阪府", "愛知県", "神奈川県", "福岡県"]
 
@@ -209,28 +214,58 @@ def normalize_query_key(query: str) -> str:
     return query
 
 
-def is_dead_query(stats: dict) -> bool:
+def _days_since(last_run: str, now: datetime = None) -> float | None:
+    """last_run 文字列（"%Y-%m-%d %H:%M"）からの経過日数を返す。
+
+    パース不可・空文字の場合は None を返す（＝復活判定の対象外）。
+    now を渡せるのはテスト用（固定時刻を注入できる）。
+    """
+    if not last_run:
+        return None
+    try:
+        dt = datetime.strptime(last_run, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    now = now or datetime.now()
+    return (now - dt).total_seconds() / 86400.0
+
+
+def is_dead_query(stats: dict, now: datetime = None) -> bool:
     """死んだクエリ（除外すべき）かどうか判定。
 
-    判定基準:
+    判定基準（「検索ヒットそのものが出ない＝真のゴミ」だけを死とみなす）:
     - 試行3回以上 かつ ヒット数0 → 死んでいる
     - 試行5回以上 かつ ヒット率5%未満 → 効率悪すぎ
-    - 試行5回以上 かつ URLはヒットするが処理済み企業のA/B実績ゼロ → 質的に無価値
-      （ng_count > 0 を要求: URLは見つかったが実際に処理して全NGの状態）
+
+    旧・判定3（試行5回以上・ヒットあり・A/B実績ゼロ・NG有 → 永久死）は廃止した。
+    A/B発生率は本番実測で約1%しかなく、1クエリあたりの標本（数十社）では
+    「実力が悪いクエリ」と「たまたま運が悪いクエリ」を統計的に区別できない。
+    この判定が良クエリまで永久追放し、本番でクエリ2630/2970件（89%）が壊滅した
+    （2026-06-04 調査）。A/B 成績は学習データとして記録は続けるが、淘汰には使わない。
+
+    復活機構:
+    死亡条件に該当しても、last_run が RECOVERY_DAYS 以上前なら False（生存）を返し、
+    1回だけ再挑戦させる。再挑戦してまた駄目なら last_run が更新され再び死ぬので、
+    実質「RECOVERY_DAYS ごとに1回だけ試す」挙動になる（検索コストは限定的）。
     """
     runs = stats.get("runs", 0)
     total_hits = stats.get("total_hits", 0)
+
+    dead = False
     if runs >= 3 and total_hits == 0:
-        return True
-    if runs >= 5 and total_hits / runs < 0.05:
-        return True
-    if (runs >= 5
-            and total_hits > 0
-            and stats.get("a_rank", 0) == 0
-            and stats.get("b_rank", 0) == 0
-            and stats.get("ng_count", 0) > 0):
-        return True
-    return False
+        dead = True
+    elif runs >= 5 and total_hits / runs < 0.05:
+        dead = True
+
+    if not dead:
+        return False
+
+    # 復活: 最後の実行から RECOVERY_DAYS 以上経っていれば再挑戦させる
+    days = _days_since(stats.get("last_run", ""), now=now)
+    if days is not None and days >= RECOVERY_DAYS:
+        return False
+
+    return True
 
 
 def has_media_hit_history(media: str, stats: dict) -> bool:
@@ -699,6 +734,53 @@ def show_top_queries(n: int = 20):
         for i, (query, data) in enumerate(sorted_stats[:n], 1):
             print(f"  [{i:2d}] 平均{data.get('avg_hits', 0):.1f}件 | {query}")
     print()
+
+
+def get_producing_queries() -> list[dict]:
+    """A/B（リストアップ成功）を1件以上出したクエリの成績一覧を返す。
+
+    淘汰フィルタとは独立した「成功記録の可視化」用。判定3を廃止しても
+    どのクエリが成果を出したかは load_stats() に蓄積され続けるので、ここで集計する。
+
+    Returns:
+        list[dict]: AB件数降順。各要素は query / A / B / AB / NG / runs / total_hits / last_run
+    """
+    stats = load_stats().get("queries", {})
+    rows = []
+    for query, s in stats.items():
+        a = s.get("a_rank", 0)
+        b = s.get("b_rank", 0)
+        if a + b <= 0:
+            continue
+        rows.append({
+            "query": query,
+            "A": a, "B": b, "AB": a + b,
+            "NG": s.get("ng_count", 0),
+            "runs": s.get("runs", 0),
+            "total_hits": s.get("total_hits", 0),
+            "last_run": s.get("last_run", ""),
+        })
+    rows.sort(key=lambda r: (-r["AB"], -r["A"]))
+    return rows
+
+
+def export_query_performance(path: str = None) -> str:
+    """A/Bを生んだクエリの成績を CSV に書き出す（可視化用）。
+
+    Returns:
+        書き出したファイルパス
+    """
+    import csv as _csv
+    rows = get_producing_queries()
+    if path is None:
+        path = os.path.join(_OUTPUT_DIR, "query_performance.csv")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fields = ["query", "A", "B", "AB", "NG", "runs", "total_hits", "last_run"]
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = _csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+    return path
 
 
 def get_media_stats() -> list[dict]:

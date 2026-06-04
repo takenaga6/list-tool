@@ -1,7 +1,10 @@
 """Phase 0a 候補1+2: 学習機能強化テスト
 
-候補1: is_dead_query に質的ゼロ条件追加（runs>=5 & total_hits>0 & a_rank+b_rank=0 & ng_count>0）
-候補2: sort_key のグループ2を ab_rate >= AB_RATE_HIGH_QUALITY_THRESHOLD に絞り、低AB率はグループ3に降格
+候補1: is_dead_query の質的ゼロ条件（runs>=5 & total_hits>0 & a_rank+b_rank=0 & ng_count>0）
+       → 2026-06-04 に廃止。A/B発生率が約1%しかなく、1クエリの標本では
+       「実力が悪い」と「運が悪い」を区別できず、良クエリまで永久追放して
+       本番クエリ2630/2970件が壊滅したため。本クラスは「廃止後＝これらは生存」を確認する。
+候補2: sort_key のグループ2を ab_rate >= AB_RATE_HIGH_QUALITY_THRESHOLD に絞り、低AB率はグループ3に降格（現役）
 """
 import unittest
 from unittest.mock import patch
@@ -40,35 +43,31 @@ def _make_qd(runs: int, total_hits: int, a_rank: int = 0, b_rank: int = 0, ng_co
 # ─────────────────────────────────────────────
 
 class TestIsDeadQueryPhase0aCandidate1(unittest.TestCase):
-    """候補1: runs>=5 & total_hits>0 & a_rank+b_rank=0 & ng_count>0 で除外"""
+    """候補1（質的ゼロ条件）は 2026-06-04 に廃止。ヒットが出ていれば生存することを確認。"""
 
-    def test_quality_zero_condition_activates_at_runs5(self):
-        """runs=5, total_hits=20, a_rank=0, b_rank=0, ng_count>0 → 質的ゼロで除外"""
-        self.assertTrue(is_dead_query(_make_qd(runs=5, total_hits=20, ng_count=10)))
+    def test_quality_zero_no_longer_excluded_at_runs5(self):
+        """runs=5, total_hits=20, a_rank=0, b_rank=0, ng_count>0 → 廃止後は生存（旧仕様では除外）"""
+        self.assertFalse(is_dead_query(_make_qd(runs=5, total_hits=20, ng_count=10)))
 
-    def test_quality_zero_condition_not_activated_at_runs4(self):
-        """runs=4, total_hits=20, a_rank=0, b_rank=0 → まだ猶予あり（5回未満）"""
-        self.assertFalse(is_dead_query(_make_qd(runs=4, total_hits=20, ng_count=10)))
+    def test_quality_zero_no_longer_excluded_many_runs(self):
+        """大量実行・ヒット有・A/Bゼロでも生存（一方通行の永久死をやめた）"""
+        self.assertFalse(is_dead_query(_make_qd(runs=30, total_hits=90, ng_count=50)))
 
     def test_existing_total_hits_zero_condition_still_works(self):
         """runs=5, total_hits=0 → 既存条件（ヒット数ゼロ）で除外（回帰確認）"""
         self.assertTrue(is_dead_query({"runs": 5, "total_hits": 0}))
 
-    def test_a_rank_protects_from_quality_zero_exclusion(self):
-        """runs=5, total_hits=20, a_rank=1, b_rank=0 → A実績あり → 除外しない"""
+    def test_low_hit_efficiency_still_dead(self):
+        """runs=100, total_hits=4（4%）→ ヒット率5%未満で除外（判定2は現役）"""
+        self.assertTrue(is_dead_query({"runs": 100, "total_hits": 4}))
+
+    def test_a_rank_query_alive(self):
+        """A実績あり → 当然生存"""
         self.assertFalse(is_dead_query(_make_qd(runs=5, total_hits=20, a_rank=1, ng_count=10)))
 
-    def test_b_rank_protects_from_quality_zero_exclusion(self):
-        """runs=5, total_hits=20, a_rank=0, b_rank=1 → B実績あり → 除外しない"""
+    def test_b_rank_query_alive(self):
+        """B実績あり → 当然生存"""
         self.assertFalse(is_dead_query(_make_qd(runs=5, total_hits=20, b_rank=1, ng_count=10)))
-
-    def test_ng_count_zero_prevents_quality_zero_exclusion(self):
-        """runs=5, total_hits=20, a_rank=0, b_rank=0, ng_count=0 → 未処理 → 除外しない
-
-        URLが見つかったが処理が完了していない（エラー・重複除外等）状態は
-        質的ゼロと判定しない。ng_count > 0 が前提条件。
-        """
-        self.assertFalse(is_dead_query(_make_qd(runs=5, total_hits=20, ng_count=0)))
 
 
 # ─────────────────────────────────────────────
@@ -76,13 +75,13 @@ class TestIsDeadQueryPhase0aCandidate1(unittest.TestCase):
 # ─────────────────────────────────────────────
 
 class TestCustomQueryProtectionPhase0aCandidate1(unittest.TestCase):
-    """カスタムクエリは質的ゼロ条件でも除外されない"""
+    """カスタムクエリは死亡条件（ヒット0）に該当しても除外されない"""
 
-    def test_custom_query_not_excluded_even_if_quality_zero(self):
-        """質的ゼロ条件に該当するクエリもカスタムクエリなら除外されない"""
+    def test_custom_query_not_excluded_even_if_dead(self):
+        """ヒット0で死んでいるクエリもカスタム指定なら除外されない"""
         custom_q = "カスタムクエリ学習強化専用テスト"
         mock_stats = _make_stats(**{
-            custom_q: _make_qd(runs=5, total_hits=20, ng_count=15)
+            custom_q: _make_qd(runs=5, total_hits=0, ng_count=15)
         })
         with patch("agents.keyword_agent.load_stats", return_value=mock_stats):
             result = get_sorted_queries(
@@ -159,34 +158,34 @@ class TestSortKeyPhase0aCandidate2(unittest.TestCase):
 # ─────────────────────────────────────────────
 
 class TestIntegrationPhase0aLearningEnhance(unittest.TestCase):
-    """候補1で除外されたクエリは sort 対象から外れ、残りで ab_rate >= 0.05 が優先される"""
+    """死んだクエリ（ヒット0）は sort 対象から外れ、残りで ab_rate >= 0.05 が優先される"""
 
     @patch("agents.keyword_agent.generate_all_queries")
     @patch("agents.keyword_agent.load_stats")
-    def test_quality_zero_query_excluded_before_sorting(self, mock_load, mock_gen):
-        """runs>=5 & total_hits>0 & a_rank+b_rank=0 & ng_count>0 → exclude_dead=True で除外"""
-        dead_q = "質的ゼロクエリ_統合テスト"
+    def test_dead_query_excluded_before_sorting(self, mock_load, mock_gen):
+        """runs>=3 & total_hits=0（ヒットそのものが出ない）→ exclude_dead=True で除外"""
+        dead_q = "死クエリ_統合テスト"
         mock_gen.return_value = [dead_q]
         mock_load.return_value = _make_stats(**{
-            dead_q: _make_qd(runs=5, total_hits=20, ng_count=15)
+            dead_q: _make_qd(runs=5, total_hits=0, ng_count=15)
         })
         result = get_sorted_queries(exclude_dead=True)
         self.assertNotIn(dead_q, result)
 
     @patch("agents.keyword_agent.generate_all_queries")
     @patch("agents.keyword_agent.load_stats")
-    def test_high_ab_rate_prioritized_after_quality_zero_excluded(self, mock_load, mock_gen):
+    def test_high_ab_rate_prioritized_after_dead_excluded(self, mock_load, mock_gen):
         """除外後の残りクエリで ab_rate>=0.05 が ab_rate<0.05 より優先される
 
-        dead_q: runs=5 で質的ゼロ条件に該当 → 除外
-        high_q/low_q: runs=4 で質的ゼロ・グループ4 の両条件を回避しグループ2/3 分岐をテスト
+        dead_q: ヒット0で死亡 → 除外
+        high_q/low_q: runs=4 でグループ4 条件を回避しグループ2/3 分岐をテスト
         """
-        dead_q = "質的ゼロクエリ_統合テスト2"
+        dead_q = "死クエリ_統合テスト2"
         high_q = "高AB率クエリ_統合テスト2"
         low_q  = "低AB率クエリ_統合テスト2"
         mock_gen.return_value = [dead_q, low_q, high_q]  # 初期順: dead→low→high
         mock_load.return_value = _make_stats(**{
-            dead_q: _make_qd(runs=5, total_hits=20, ng_count=15),           # 除外される
+            dead_q: _make_qd(runs=5, total_hits=0, ng_count=15),           # 除外される
             high_q: _make_qd(runs=4, total_hits=100, b_rank=5, ng_count=30),  # ab_rate=0.05
             low_q:  _make_qd(runs=4, total_hits=100, b_rank=4, ng_count=30),  # ab_rate=0.04
         })
