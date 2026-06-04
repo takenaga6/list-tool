@@ -262,7 +262,7 @@ def review_and_register(
                         })
                     # クエリのNG記録（学習）
                     from agents.keyword_agent import record_ng
-                    record_ng(item.get("search_query", ""))
+                    record_ng(item.get("search_query", ""), source=item.get("source"))
             except ValueError:
                 pass
 
@@ -273,7 +273,7 @@ def review_and_register(
         # 全件スキップの場合もNGをクエリ学習に記録
         from agents.keyword_agent import record_ng
         for item in pending:
-            record_ng(item.get("search_query", ""))
+            record_ng(item.get("search_query", ""), source=item.get("source"))
         print("  スキップしました")
         return 0
     else:
@@ -292,7 +292,7 @@ def review_and_register(
         approved_set = set(approved)
         for i, item in enumerate(pending):
             if i not in approved_set and i not in exclude_indices:
-                record_ng(item.get("search_query", ""))
+                record_ng(item.get("search_query", ""), source=item.get("source"))
 
     success_count = 0
     for idx in approved:
@@ -485,6 +485,10 @@ def process_one_company(
     url = search_result["url"]
     is_media_page = search_result.get("is_media_page", False)
     file_type = search_result.get("file_type", "")
+    # 学習データの source（媒体次元）。検索/リスト取得時に各 result へ埋めた値を使い、
+    # record_hit と record_ng / record_rank_result の source を一致させる（媒体別集計の前提）。
+    # 未設定（ファイル再帰経由など）は None → record_* 側で DEFAULT_SOURCE にフォールバック。
+    _src = search_result.get("_source")
 
     try:
         # 重複チェック
@@ -523,7 +527,7 @@ def process_one_company(
             print(f"  ✂ スクリーナーNG [{screen_reason}]: {title}")
             logger.debug(f"[LEARNING] record_ng(スクリーナーNG): query={search_result['search_query']!r}")
             logger.info(f"[FUNNEL] screener_ng [{screen_reason}]: {url}")
-            record_ng(search_result["search_query"])
+            record_ng(search_result["search_query"], source=_src)
             return "ng"
 
         # ── Agent2: スクレイピング ──────────────────────────────────
@@ -575,7 +579,7 @@ def process_one_company(
             print(f"  ⛔ NGスキップ: {_ng_name or company_domain} [{_ng_reason}]")
             logger.debug(f"[LEARNING] record_ng(ランクNG): query={search_result['search_query']!r}")
             logger.info(f"[FUNNEL] rank_ng [{_ng_reason}]: {_ng_name or company_domain}")
-            record_ng(search_result["search_query"])  # NGをクエリ学習に反映
+            record_ng(search_result["search_query"], source=_src)  # NGをクエリ学習に反映
             add_to_excluded_companies(_ng_name, f"NG: {_ng_reason}")
             # Phase 1必須条件NGの場合、理由をcompany_infoに記録（後続のHubSpot書込用）
             if "Phase1必須条件NG" in _ng_reason:
@@ -664,7 +668,7 @@ def process_one_company(
                 f"{_low_name or company_domain}"
             )
             logger.info(f"[FUNNEL] low_score [score={score}]: {_low_name or company_domain}")
-            record_ng(search_result["search_query"])
+            record_ng(search_result["search_query"], source=_src)
             add_to_excluded_companies(_low_name, f"スコア不足（{score}点）")
             return "ng"
 
@@ -700,7 +704,7 @@ def process_one_company(
                 })
                 logger.info(f"[LEARNING] record_rank_result: rank={rank_result['rank']}, query={search_result['search_query']!r}")
                 logger.info(f"[FUNNEL] registered [{rank_result['rank']}/{score}点]: {company_info['company_name']}")
-                record_rank_result(search_result["search_query"], rank_result["rank"])
+                record_rank_result(search_result["search_query"], rank_result["rank"], source=_src)
                 return "success"
 
         # 確認モード：pendingリストに追加して後でまとめて承認
@@ -709,12 +713,13 @@ def process_one_company(
                 "company_info":  company_info,
                 "rank_result":   rank_result,
                 "search_query":  search_result["search_query"],
+                "source":        _src,
             })
             print(
                 f"  [{rank_result['rank']}({score}点)] 候補追加: "
                 f"{company_info.get('company_name') or company_domain}"
             )
-            record_rank_result(search_result["search_query"], rank_result["rank"])
+            record_rank_result(search_result["search_query"], rank_result["rank"], source=_src)
             logger.info(f"[FUNNEL] pending [{rank_result['rank']}/{score}点]: {company_info.get('company_name') or company_domain}")
             return "pending"  # 承認前はpending（successと区別）
 
@@ -752,7 +757,7 @@ def process_one_company(
                 "元URL":   company_info.get("source_url", url),
                 "検索クエリ": search_result.get("search_query", ""),
             })
-            record_rank_result(search_result["search_query"], rank)
+            record_rank_result(search_result["search_query"], rank, source=_src)
             logger.info(f"[FUNNEL] registered [{rank}/{score}点]: {company_info.get('company_name') or company_domain}")
 
             found_files = company_info.get("found_file_links", [])
@@ -850,6 +855,9 @@ def main():
             for list_url in list_urls:
                 print(f"\n📋 リストページ取得中: {list_url}")
                 list_results = _scrape_list_with_signal(list_url, max_companies=target_count * 2)
+                _list_src = f"list_page:{extract_domain(list_url)}"
+                for _r in list_results:
+                    _r["_source"] = _list_src
                 print(f"  → {len(list_results)}社のHP取得完了。処理開始...")
 
                 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -916,6 +924,10 @@ def main():
             # ヒット数を学習データとして記録
             logger.info(f"[LEARNING] record_hit: query={keyword!r}, hits={len(search_results)}, source=search:{period_label}")
             record_hit(keyword, len(search_results), source=f"search:{period_label}")
+
+            # 各 result に source を刻む（NG/ランク記録を record_hit と同じ source に揃える）
+            for _r in search_results:
+                _r["_source"] = f"search:{period_label}"
 
             if not search_results:
                 no_result_count += 1
@@ -1388,6 +1400,9 @@ def run_batch(
                     break
                 print(f"\n📋 リストページ取得中: {list_url}")
                 list_results = _scrape_list_with_signal(list_url, max_companies=target_count * 2)
+                _list_src = f"list_page:{extract_domain(list_url)}"
+                for _r in list_results:
+                    _r["_source"] = _list_src
                 print(f"  → {len(list_results)}社を処理開始...")
                 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                     futures = {
@@ -1419,6 +1434,8 @@ def run_batch(
                 search_results = search_google(keyword, period_tbs_i, MAX_RESULTS_PER_QUERY)
                 logger.info(f"[LEARNING] record_hit: query={keyword!r}, hits={len(search_results)}, source=search:{period_label_i}")
                 record_hit(keyword, len(search_results), source=f"search:{period_label_i}")
+                for _r in search_results:
+                    _r["_source"] = f"search:{period_label_i}"
                 if not search_results:
                     no_result_count += 1
                     print("  ⚠️ 検索結果なし")
