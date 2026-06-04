@@ -3,8 +3,10 @@
 Phase 6.7A: is_dead_query / get_sorted_queries(exclude_dead)
 Phase 6.7A.2: main.py の while 条件による早期打ち切り
 Phase 6.7B: has_media_hit_history / generate_all_queries のセクション9削減
+2026-06-04: 判定3（A/B無→永久死）廃止・復活機構（RECOVERY_DAYS）追加
 """
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from agents.keyword_agent import (
@@ -12,6 +14,8 @@ from agents.keyword_agent import (
     has_media_hit_history,
     get_sorted_queries,
     generate_all_queries,
+    get_producing_queries,
+    RECOVERY_DAYS,
     PRIORITY_PREFECTURES,
     PR_MEDIA,
 )
@@ -71,6 +75,77 @@ class TestIsDeadQuery(unittest.TestCase):
     def test_alive_query_runs_1_zero_hits(self):
         """1回試行で0件 → まだ判定できない"""
         self.assertFalse(is_dead_query({"runs": 1, "total_hits": 0}))
+
+
+class TestCriterion3Removed(unittest.TestCase):
+    """2026-06-04: 旧・判定3（5回+ヒット有+A/B無+NG有→永久死）の廃止確認"""
+
+    def test_hits_but_no_ab_with_ng_is_alive(self):
+        """ヒットは出るがA/Bゼロ・NG有 → 旧判定3では死だが、廃止後は生存"""
+        stats = {
+            "runs": 20, "total_hits": 56,  # ヒット率は十分高い
+            "a_rank": 0, "b_rank": 0, "ng_count": 5,
+            "last_run": "2026-06-01 03:44",
+        }
+        self.assertFalse(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+    def test_hits_no_ab_no_ng_is_alive(self):
+        """ヒット有・A/Bゼロ・NGゼロ → 当然生存（ヒットしている）"""
+        stats = {
+            "runs": 10, "total_hits": 30,
+            "a_rank": 0, "b_rank": 0, "ng_count": 0,
+            "last_run": "2026-06-03 10:00",
+        }
+        self.assertFalse(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+    def test_zero_hits_still_dead(self):
+        """検索ヒットそのものが出ない（判定1）は引き続き死（最近実行）"""
+        stats = {"runs": 5, "total_hits": 0, "last_run": "2026-06-03 10:00"}
+        self.assertTrue(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+
+class TestRecoveryMechanism(unittest.TestCase):
+    """RECOVERY_DAYS による死んだクエリの復活確認"""
+
+    def test_dead_query_resurrected_after_recovery_days(self):
+        """ヒット0で死んでいても、RECOVERY_DAYS以上前なら復活（生存扱い）"""
+        old = (datetime(2026, 6, 4) - timedelta(days=RECOVERY_DAYS + 1)).strftime("%Y-%m-%d %H:%M")
+        stats = {"runs": 5, "total_hits": 0, "last_run": old}
+        self.assertFalse(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+    def test_dead_query_stays_dead_within_recovery_window(self):
+        """RECOVERY_DAYS 未満なら死んだまま"""
+        recent = (datetime(2026, 6, 4) - timedelta(days=RECOVERY_DAYS - 1)).strftime("%Y-%m-%d %H:%M")
+        stats = {"runs": 5, "total_hits": 0, "last_run": recent}
+        self.assertTrue(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+    def test_empty_last_run_no_recovery(self):
+        """last_run が空 → 復活判定対象外、死んだまま（既存挙動の後方互換）"""
+        stats = {"runs": 5, "total_hits": 0, "last_run": ""}
+        self.assertTrue(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+    def test_malformed_last_run_no_recovery(self):
+        """last_run が不正形式 → 復活判定対象外、死んだまま"""
+        stats = {"runs": 5, "total_hits": 0, "last_run": "不正な日付"}
+        self.assertTrue(is_dead_query(stats, now=datetime(2026, 6, 4, 0, 0)))
+
+
+class TestProducingQueries(unittest.TestCase):
+    """get_producing_queries(): A/B成功記録の可視化"""
+
+    def test_only_ab_producing_queries_returned(self):
+        """A/Bを出したクエリだけが返り、AB件数降順に並ぶ"""
+        mock_stats = _make_stats(
+            **{
+                "勝ちクエリ": {"a_rank": 2, "b_rank": 1, "ng_count": 5, "runs": 10, "total_hits": 30, "last_run": ""},
+                "B少しクエリ": {"a_rank": 0, "b_rank": 1, "ng_count": 3, "runs": 5, "total_hits": 12, "last_run": ""},
+                "無成果クエリ": {"a_rank": 0, "b_rank": 0, "ng_count": 8, "runs": 9, "total_hits": 20, "last_run": ""},
+            }
+        )
+        with patch("agents.keyword_agent.load_stats", return_value=mock_stats):
+            rows = get_producing_queries()
+        self.assertEqual([r["query"] for r in rows], ["勝ちクエリ", "B少しクエリ"])
+        self.assertEqual(rows[0]["AB"], 3)
 
 
 # ─────────────────────────────────────────────
