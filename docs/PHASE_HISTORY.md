@@ -1606,3 +1606,71 @@ A/B発生率が約1%しかないため、1クエリあたりの標本（数十�
   既に generate_all_queries に存在。判定3廃止で各県インスタンスが復活＝横展開の大半は自動達成。
 - さらなる上積み候補：学習をクエリ単位→パターン単位へ集約、TARGET_INDUSTRIES 拡張、
   経産省XLSX（xlsx-importer）で従業員数を事前フィルタ。
+
+---
+
+## 回収トラック step 1: 構造化シグナル永続化（2026-06-17）
+
+> プロジェクト「list-rank-validation」（リストランク／シグナル検証）の回収トラック step 1。
+> アポ・受注実績 × シグナルの検証を「description 自由文パース」ではなく
+> HubSpot 構造化プロパティで成立させるための rank_agent 改修。
+
+### 背景（well-body-management の README より）
+
+- rank_agent は判定理由を `description` 自由文にしか書いておらず、構造化シグナル
+  プロパティ（`houteigaifukurikouseinokisaiari` 等）は「各10件程度＝ほぼ未記入」だった。
+- これにより「実績（アポ・受注）× シグナル」の相関検証ができない状態だった。
+
+### 真因（本セッションで特定した Finding-2 バグ）
+
+`evaluate_rank_v2()` は **`signals` キーを返していなかった**。しかし
+`main.py` は `company_info["signals"] = rank_result.get("signals", {})` で読んでおり、
+**常に空 dict** になっていた。
+→ 既存の S3〜S6 bool プロパティすら書かれていなかった真因はこれ。
+
+### 実装内容
+
+1. **rank_agent.py**
+   - `evaluate_useful_conditions(..., return_signals=False)` を追加。True で
+     内部の signals dict（s1_pr〜s10_profitable）も返す（後方互換: 既定は2要素タプル）。
+   - `evaluate_rank_v2()` の戻り値に **`signals`（S1〜S10 の bool）** と
+     **`rank_version`** を追加。NG パスでも `signals`（全 False）+ `rank_version` を返すため
+     書き込み側が落ちない。signals は v2 が実際に加点判定に用いた値を真実の源とする。
+
+2. **config.py**
+   - `RANK_LOGIC_VERSION = "2026-06"`（wb_rank_version に記録）。
+   - `ENABLE_WB_SIGNALS = env("ENABLE_WB_SIGNALS")`（**デフォルト OFF**）。
+
+3. **hubspot_agent.py**
+   - `build_wb_signal_props(company_data)` 純粋関数を追加。
+     `wb_sig_s1〜wb_sig_s10` / `wb_sig_score` / `wb_rank_version` /
+     `wb_lead_source_type`（既定 "list"）/ `wb_ranked_at` を組み立てる。
+   - `register_company()` 内で `ENABLE_WB_SIGNALS` が True のときのみ書き込む。
+
+4. **main.py**
+   - `company_info["score"]` / `company_info["rank_version"]` を追加セット
+     （`signals` は既存の :570 行で流れる）。
+
+### 本番安全性（重要）
+
+- `wb_sig_*` プロパティは **HubSpot 側で未作成**。未作成のまま書き込むと
+  register_company が 400 で失敗し登録が全停止するため、**ENABLE_WB_SIGNALS=False が既定**。
+  フラグ OFF の間、登録挙動は従来と完全に同一。
+- 既存の S3〜S6 bool プロパティ（HubSpot に作成済み）への書き込みは、本修正で
+  初めて正しく機能するようになる（Finding-2 バグの解消）。
+
+### 検証
+
+- ユニットテスト全 571 → **新規 test_wb_signal_persistence.py（19件）追加で全 PASS**。
+- 実データ検証・wb_* 有効化は **HubSpot 側でプロパティ作成 + コネクタ write 再認証後**に実施
+  （本セッションの HubSpot MCP は read-only のため未実施）。
+
+### 残作業（回収トラック step 2 以降）
+
+1. HubSpot にカスタムプロパティ作成: wb_sig_s1〜s10(bool) / wb_sig_score(number) /
+   wb_rank_version(string) / wb_ranked_at(date) / wb_lead_source_type(enum)。
+   ※ MCP は record 書き込み（manage_crm_objects）のみで property 定義作成は不可。
+     HubSpot UI か rank_agent の private-app token + Properties API で作成する。
+2. `ENABLE_WB_SIGNALS=1` を Render に設定 → 新規登録で wb_* が埋まることを確認。
+3. アポ・受注の歴史企業（89＋失注）を再ランクするバックフィルスクリプト。
+4. ランク別・シグナル別の受注率集計（紹介/インバウンド除外）。
