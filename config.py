@@ -86,6 +86,20 @@ RANK_A_EXTRA_SIGNALS = 2   # S1/S2あり + S3〜S6がこの数以上 → A
 RANK_B_MIN_SIGNALS   = 3   # S1/S2なしの場合のB最低ライン（S3〜S6の合計）
 MIN_REGISTER_SIGNALS = 3   # HubSpot登録最低ライン（or S1/S2あり）
 
+# ─── 回収トラック（list-rank-validation）: 構造化シグナル永続化 ───
+# rank_agent が判定したシグナル(S1〜S10)を description 自由文だけでなく
+# HubSpot の構造化プロパティ wb_sig_* へ永続化するための設定。
+# 目的: アポ・受注実績 × シグナルの検証を「テキストパース」ではなく
+#       構造化プロパティで成立させる（README: list-rank-validation 参照）。
+#
+# 注意: wb_sig_s1〜wb_sig_s10 / wb_sig_score / wb_rank_version /
+#       wb_ranked_at / wb_lead_source_type は HubSpot 側で未作成。
+#       プロパティ未作成のまま書き込むと register_company が 400 で失敗し
+#       登録が全停止するため、デフォルト OFF。
+#       HubSpot でプロパティを作成後に ENABLE_WB_SIGNALS=1 で有効化する。
+RANK_LOGIC_VERSION = "2026-06"   # ランクロジック版（wb_rank_version に記録）
+ENABLE_WB_SIGNALS = os.environ.get("ENABLE_WB_SIGNALS", "").lower() in ("1", "true", "yes")
+
 
 def load_exclude_list_csv() -> set[str]:
     """

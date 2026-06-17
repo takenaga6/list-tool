@@ -567,7 +567,9 @@ def process_one_company(
         page_text = company_info.get("_page_text", "")
         rank_result = evaluate_rank_v2(company_info, [search_result], page_text=page_text)
         company_info["rank"] = rank_result["rank"]    # HubSpot a_12 書き込み用
-        company_info["signals"] = rank_result.get("signals", {})  # HubSpot S3〜S6 書き込み用
+        company_info["signals"] = rank_result.get("signals", {})  # HubSpot S3〜S6 / wb_sig_* 書き込み用
+        company_info["score"] = rank_result.get("score")          # HubSpot wb_sig_score 用
+        company_info["rank_version"] = rank_result.get("rank_version")  # HubSpot wb_rank_version 用
 
         if rank_result["rank"] == "NG":
             _ng_name = company_info.get("company_name") or ""

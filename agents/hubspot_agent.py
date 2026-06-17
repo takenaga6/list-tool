@@ -75,6 +75,52 @@ _S2_MEDIA_NAMES: set[str] = {
 }
 
 
+def build_wb_signal_props(company_data: dict) -> dict:
+    """回収トラック用の構造化シグナルプロパティ（wb_sig_*）を組み立てる.
+
+    rank_agent が判定した S1〜S10 / スコア / ランクロジック版 / 流入経路 を
+    HubSpot の構造化プロパティへ永続化するための props dict を返す。
+    description 自由文のパースに頼らず「実績 × シグナル」検証を成立させるのが目的
+    （README: list-rank-validation）。
+
+    NOTE: wb_sig_* プロパティは HubSpot 側で未作成。未作成のまま書き込むと
+          登録が 400 で全停止するため、呼び出し側で config.ENABLE_WB_SIGNALS による
+          ゲートを必ず通すこと。本関数自体はゲートを行わない（純粋関数・テスト容易性のため）。
+
+    Args:
+        company_data: register_company に渡る企業情報。参照キー:
+            - signals: {"S1": bool, ..., "S10": bool}（evaluate_rank_v2 の戻り値）
+            - score:   int（加点-減点の合計）
+            - rank_version: str（省略時 config.RANK_LOGIC_VERSION）
+            - wb_lead_source_type: str（list/紹介/inbound/手動。省略時 "list"）
+
+    Returns:
+        HubSpot 書き込み用の props dict（bool は "true"/"false" 文字列）。
+        空値は呼び出し側の空文字除去に委ねる。
+    """
+    from datetime import datetime as _dt
+    from config import RANK_LOGIC_VERSION
+
+    props: dict = {}
+
+    signals = company_data.get("signals") or {}
+    for i in range(1, 11):
+        val = signals.get(f"S{i}")
+        if val is not None:
+            props[f"wb_sig_s{i}"] = "true" if val else "false"
+
+    score = company_data.get("score")
+    if score is not None and score != "":
+        props["wb_sig_score"] = str(score)
+
+    props["wb_rank_version"] = company_data.get("rank_version") or RANK_LOGIC_VERSION
+    # rank_agent が生成するのはアウトバウンドのリストのみ → 既定は "list"
+    props["wb_lead_source_type"] = company_data.get("wb_lead_source_type") or "list"
+    props["wb_ranked_at"] = _dt.now().strftime("%Y-%m-%d")
+
+    return props
+
+
 class HubSpotAgent:
     def __init__(self, token: str, ng_list_file: str):
         self.token = token
@@ -189,6 +235,13 @@ class HubSpotAgent:
         company_props["has_recruit_page"] = (
             "true" if company_data.get("has_recruit_page", False) else "false"
         )
+
+        # 回収トラック: 構造化シグナル wb_sig_* を書き込む（デフォルト OFF）。
+        # wb_* プロパティが HubSpot 側で未作成のうちは ENABLE_WB_SIGNALS=False のため
+        # 一切書き込まず、登録挙動は従来と完全に同一になる。
+        from config import ENABLE_WB_SIGNALS
+        if ENABLE_WB_SIGNALS:
+            company_props.update(build_wb_signal_props(company_data))
 
         # 空文字・Noneを除去
         company_props = {k: v for k, v in company_props.items() if v}

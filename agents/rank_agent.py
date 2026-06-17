@@ -879,7 +879,8 @@ def evaluate_useful_conditions(
     company_info: dict,
     page_text: str = "",
     extra_signals: dict | None = None,
-) -> tuple[int, list[str]]:
+    return_signals: bool = False,
+) -> tuple[int, list[str]] | tuple[int, list[str], dict]:
     """加点条件を評価する（Phase 5拡充版: S7/S8/S9/S10 + 相互作用ボーナス）.
 
     Args:
@@ -888,9 +889,12 @@ def evaluate_useful_conditions(
         extra_signals: evaluate_rank_v2 から渡す S1/S2/S5/S6 の bool dict。
             キー: s1_pr, s2_kenko_media, s5_renewal, s6_jisha_bldg。
             相互作用ボーナスの signals dict に統合される。None の場合は全 False 扱い。
+        return_signals: True の場合、相互作用ボーナス算出に使った signals dict
+            （s1_pr〜s10_profitable の bool）も返す。後方互換のためデフォルト False。
 
     Returns:
-        (score, reasons): 加点合計と理由リスト
+        return_signals=False（既定）: (score, reasons)
+        return_signals=True:        (score, reasons, signals)
     """
     score = 0
     reasons: list[str] = []
@@ -1023,6 +1027,8 @@ def evaluate_useful_conditions(
         score += bonus
         reasons.append(f"+{bonus} 相互作用ボーナス({bonus_reason})")
 
+    if return_signals:
+        return score, reasons, signals
     return score, reasons
 
 
@@ -1106,11 +1112,15 @@ def evaluate_rank_v2(
             "rank": "A" / "B" / "C" / "NG",
             "score": int (加点-減点の合計),
             "reasons": list[str] (理由),
+            "signals": dict (S1〜S10 の bool。HubSpot 構造化プロパティ書き込み用),
+            "rank_version": str (ランクロジック版),
             "useful_score": int,
             "negative_score": int,
             "ng_reason": str (NG時のみ),
         }
     """
+    from config import RANK_LOGIC_VERSION
+
     # ===== 必須条件NGチェック（既存ロジックを使う） =====
     # 既存の evaluate_rank() の必須NG部分を踏襲
     existing_result = evaluate_rank(company_info, search_results, page_text=page_text)
@@ -1120,6 +1130,8 @@ def evaluate_rank_v2(
             "rank": "NG",
             "score": -99,
             "reasons": existing_result.get("reasons", []),
+            "signals": {f"S{i}": False for i in range(1, 11)},
+            "rank_version": RANK_LOGIC_VERSION,
             "useful_score": 0,
             "negative_score": 0,
             "ng_reason": existing_result.get("ng_reason", ""),
@@ -1134,7 +1146,9 @@ def evaluate_rank_v2(
         "s5_renewal":     old_signals.get("S5", False),
         "s6_jisha_bldg":  old_signals.get("S6", False),
     }
-    useful_score, useful_reasons = evaluate_useful_conditions(company_info, page_text, extra_signals=extra_sigs)
+    useful_score, useful_reasons, uc_signals = evaluate_useful_conditions(
+        company_info, page_text, extra_signals=extra_sigs, return_signals=True
+    )
     negative_score, negative_reasons = evaluate_negative_conditions(company_info, page_text)
     total_score = useful_score + negative_score
 
@@ -1150,10 +1164,28 @@ def evaluate_rank_v2(
 
     all_reasons = useful_reasons + negative_reasons
 
+    # ===== 構造化シグナル（S1〜S10）=====
+    # uc_signals は evaluate_useful_conditions が実際に加点判定に用いた値。
+    # v2 が確定した値を真実の源とし、HubSpot 構造化プロパティへ永続化する。
+    signals = {
+        "S1":  uc_signals.get("s1_pr", False),
+        "S2":  uc_signals.get("s2_kenko_media", False),
+        "S3":  uc_signals.get("s3_welfare", False),
+        "S4":  uc_signals.get("s4_kenko_keiei", False),
+        "S5":  uc_signals.get("s5_renewal", False),
+        "S6":  uc_signals.get("s6_jisha_bldg", False),
+        "S7":  uc_signals.get("s7_iso", False),
+        "S8":  uc_signals.get("s8_sdgs", False),
+        "S9":  uc_signals.get("s9_president_health", False),
+        "S10": uc_signals.get("s10_profitable", False),
+    }
+
     return {
         "rank": rank,
         "score": total_score,
         "reasons": all_reasons,
+        "signals": signals,
+        "rank_version": RANK_LOGIC_VERSION,
         "useful_score": useful_score,
         "negative_score": negative_score,
     }
