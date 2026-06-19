@@ -33,9 +33,17 @@ if _ROOT not in sys.path:
 import config as _config
 _config.record_domain_fail = lambda *a, **k: None
 
-from agents.scraper_agent import get_page_text, EMPLOYEE_PATTERNS as NEW_PATTERNS
+from agents.scraper_agent import get_page_text
 
 BASE_URL = "https://api.hubapi.com"
+
+# 新 EMPLOYEE_PATTERNS（PR #12）— scraper の版に依存せず内蔵する。
+# こうすることで PR #12 をマージする前（＝現在の本番デプロイ）でも検証できる。
+NEW_PATTERNS = [
+    r"(?:従業員|社員|スタッフ|職員|人員)(?:数|人数)?\s*(?:[（(][^）)]*[）)])?\s*[：:\s]*約?\s*([\d,]+)\s*[名人]",
+    r"([\d,]+)\s*[名人](?:のスタッフ|の社員|の従業員|の職員)",
+    r"(?:総勢|総従業員数|グループ従業員数)\s*[：:\s]*約?\s*([\d,]+)\s*[名人]",
+]
 
 # 旧 EMPLOYEE_PATTERNS（PR #12 以前）— 比較用に固定で持つ
 OLD_PATTERNS = [
