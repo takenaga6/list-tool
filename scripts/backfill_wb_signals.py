@@ -31,6 +31,7 @@ import sys
 import csv
 import time
 import argparse
+from collections import Counter
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -138,24 +139,30 @@ def fetch_target_companies(token: str) -> list[dict]:
     return results
 
 
-def rerank_company(company: dict) -> dict | None:
-    """企業HPを再スクレイプ → evaluate_rank_v2。失敗時 None。
+def rerank_company(company: dict) -> tuple[dict | None, str, int]:
+    """企業HPを再スクレイプ → evaluate_rank_v2。
 
-    Returns: rank_result dict（signals/score/rank/rank_version を含む）
+    URLは自社ドメイン(domain)を優先する。HubSpot の website には媒体URL
+    （voice-report 等）や末尾タイプミス（例: mabuchist.co.jpl）が混入しており、
+    それを掴むと再ランクに失敗するため。
+
+    Returns: (rank_result | None, reason, page_chars)
+      reason: "ok" / "empty_page" / "no_domain" /
+              "no_company_url" / "scrape_error:<type>"
     """
     props = company.get("properties", {})
-    website = props.get("website") or props.get("domain") or ""
-    if not website:
-        return None
-    if not website.startswith("http"):
-        website = "https://" + website
+    domain = (props.get("domain") or "").strip()
+    website = (props.get("website") or "").strip()
+    base = domain or website  # 自社ドメイン優先
+    if not base:
+        return None, "no_domain", 0
+    url = base if base.startswith("http") else "https://" + base
     try:
-        info = scrape_company_info(website)
+        info = scrape_company_info(url)
     except Exception as e:
-        print(f"    scrape失敗: {e}")
-        return None
+        return None, f"scrape_error:{type(e).__name__}", 0
     if not info.get("company_url"):
-        return None
+        return None, "no_company_url", 0
     # HubSpot 側の業種・従業員数で補完（スクレイプで取れない場合の保険）
     info.setdefault("industry", props.get("industry", "") or "")
     if not info.get("employee_count"):
@@ -176,7 +183,8 @@ def rerank_company(company: dict) -> dict | None:
         "source_list_url": f"https://{media_dom}/" if media_dom else "",
         "search_query": "",
     }]
-    return evaluate_rank_v2(info, search_results, page_text=page_text)
+    result = evaluate_rank_v2(info, search_results, page_text=page_text)
+    return result, ("ok" if page_text else "empty_page"), len(page_text)
 
 
 def build_patch_props(lead_source: str, rank_result: dict | None) -> dict:
@@ -262,6 +270,8 @@ def main() -> int:
     parser.add_argument("--no-scrape", action="store_true", help="再スクレイプ/再ランクせず流入分類のみ")
     parser.add_argument("--limit", type=int, default=0, help="処理する社数の上限（0=全件）")
     parser.add_argument("--sleep", type=float, default=1.0, help="スクレイプ間の待機秒")
+    parser.add_argument("--rerank-all", action="store_true",
+                        help="list 経由だけでなく全企業を再ランク（手動/紹介も signals 取得）")
     args = parser.parse_args()
 
     token = os.environ.get("HUBSPOT_TOKEN", "")
@@ -278,6 +288,7 @@ def main() -> int:
 
     rows: list[dict] = []
     written = 0
+    rerank_reasons: Counter = Counter()
     for idx, comp in enumerate(companies, 1):
         cid = comp["id"]
         props = comp.get("properties", {})
@@ -288,8 +299,11 @@ def main() -> int:
         won = _won(props)
 
         rank_result = None
-        if not args.no_scrape and lead_source == "list":
-            rank_result = rerank_company(comp)
+        if not args.no_scrape and (lead_source == "list" or args.rerank_all):
+            rank_result, reason, _chars = rerank_company(comp)
+            rerank_reasons[reason] += 1
+            if rank_result is None:
+                print(f"    再ランク不能: {reason}")
             time.sleep(args.sleep)
 
         patch = build_patch_props(lead_source, rank_result)
@@ -325,6 +339,10 @@ def main() -> int:
 
     print(f"\n書き込み: {written}社" + ("（dry-run のため0）" if args.dry_run else ""))
     print(f"明細CSV: {csv_path}")
+    if rerank_reasons:
+        print("\n■ 再ランク結果の内訳（原因可視化）")
+        for reason, n in rerank_reasons.most_common():
+            print(f"  {reason:28} {n}社")
     print_report(rows)
     return 0
 
