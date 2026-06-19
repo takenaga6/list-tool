@@ -52,6 +52,16 @@ from config import (
 from agents.rank_agent import evaluate_rank_v2
 from agents.scraper_agent import scrape_company_info
 
+# 副作用の無効化:
+# scrape_company_info はスクレイプ失敗時に config.record_domain_fail() を呼び、
+# 本番の learned_exclude.json（3回失敗で自動除外）にドメインを記録する。
+# バックフィルは実績企業の再スクレイプを伴うため、これを呼ぶと実績ドメインを
+# 誤って本番の除外リストへ載せうる。分析目的なので no-op に差し替える。
+# （scrape_company_info は実行時に `from config import record_domain_fail` する
+#   ため、config モジュール属性の差し替えで確実に無効化される。）
+import config as _config
+_config.record_domain_fail = lambda *a, **k: None
+
 BASE_URL = "https://api.hubapi.com"
 
 # ── 媒体逆引き（ドメイン → 媒体名）─────────────────────────────
