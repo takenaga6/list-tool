@@ -63,8 +63,8 @@ class TestEvaluateRankV2Signals(unittest.TestCase):
     def test_v2_ng_path_still_returns_signals(self):
         """NG企業でも signals(全False)+rank_version を返す（書き込み側が落ちない）."""
         company_info = {
-            "company_name": "テスト広告株式会社",
-            "industry": "広告代理店",   # Phase1 NG業種
+            "company_name": "テストメディア株式会社",
+            "industry": "デジタルマーケティング",   # Phase1 NG業種（残存5語の1つ）
             "employee_count": "80",
         }
         search_results = [{"url": "https://ng.co.jp", "title": "", "snippet": ""}]

@@ -61,11 +61,21 @@ class TestPhase1MustConditions(unittest.TestCase):
         self.assertTrue(ok, f"継続想定社がNGになった: {reason}")
         self.assertEqual(reason, "OK")
 
-    # テスト2: 既知の非継続社「博報堂」想定 — 広告代理店NG
-    def test_advertising_agency_ng(self):
+    # テスト2: 2026-06-26改定で広告代理店はNG解除 → 通る
+    def test_advertising_agency_now_allowed(self):
         company_info = {
             "company_name": "株式会社博報堂",
             "industry": "広告代理店",
+            "employee_count": "100",
+        }
+        ok, reason = check_phase1_must_conditions(company_info, _STD_PAGE_TEXT)
+        self.assertTrue(ok, f"広告代理店がNGのまま: {reason}")
+
+    # テスト2b: 残るメディア系キーワード（デジタルマーケ等）は引き続きNG
+    def test_remaining_media_keyword_ng(self):
+        company_info = {
+            "company_name": "株式会社サンプル",
+            "industry": "デジタルマーケティング",
             "employee_count": "100",
         }
         ok, reason = check_phase1_must_conditions(company_info, _STD_PAGE_TEXT)
@@ -177,14 +187,24 @@ class TestPhase1MustConditions(unittest.TestCase):
 class TestPreScreenPhase1(unittest.TestCase):
     """pre_screen のスニペット段階で広告/メディア業種・規模で弾けるか。"""
 
-    def test_pre_screen_rejects_advertising(self):
+    def test_pre_screen_rejects_media(self):
+        # 残るメディア系キーワードはスニペット段階で引き続き弾く
         result, reason = pre_screen({
+            "url": "https://example.co.jp/",
+            "title": "株式会社サンプル",
+            "snippet": "デジタルマーケティングを提供",
+        })
+        self.assertFalse(result)
+        self.assertIn("NG業種(広告/メディア)", reason)
+
+    def test_pre_screen_allows_advertising(self):
+        # 2026-06-26改定で広告代理店/総合広告はNG解除 → スニペット段階を通す
+        result, _ = pre_screen({
             "url": "https://example.co.jp/",
             "title": "株式会社サンプル広告代理店",
             "snippet": "総合広告サービスを提供",
         })
-        self.assertFalse(result)
-        self.assertIn("NG業種(広告/メディア)", reason)
+        self.assertTrue(result)
 
     def test_pre_screen_rejects_blank_zone_employees(self):
         result, reason = pre_screen({
@@ -203,10 +223,11 @@ class TestPreScreenPhase1(unittest.TestCase):
 class TestEvaluateRankIntegration(unittest.TestCase):
     """evaluate_rank() に必須条件チェックが組み込まれているか。"""
 
-    def test_advertising_company_returns_ng(self):
+    def test_media_company_returns_ng(self):
+        # 残るメディア系キーワードは evaluate_rank でも必須条件NGになる
         company_info = {
-            "company_name": "株式会社サンプル広告",
-            "industry": "広告代理店",
+            "company_name": "株式会社サンプル",
+            "industry": "デジタルマーケティング",
             "employee_count": "50",
         }
         result = evaluate_rank(

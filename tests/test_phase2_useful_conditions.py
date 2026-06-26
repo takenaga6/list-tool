@@ -367,11 +367,14 @@ class TestEvaluateRankV2Integration(unittest.TestCase):
         )
         self.assertIn(result["rank"], ["A", "B"])
 
-    def test_advertising_is_ng(self):
-        """広告代理店 → NG（必須条件違反）."""
+    def test_media_industry_is_ng(self):
+        """残存メディア系（デジタルマーケ等） → NG（必須条件違反）.
+
+        2026-06-26改定で広告代理店・総合広告・PR会社・マーケティング会社はNG解除。
+        """
         company_info = {
-            "company_name": "サンプル広告株式会社",
-            "industry": "広告代理店",
+            "company_name": "サンプル株式会社",
+            "industry": "デジタルマーケティング",
             "employee_count": "100",
             "address": "東京都港区",
         }

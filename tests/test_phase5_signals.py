@@ -79,11 +79,14 @@ class TestPhase1Relaxation(unittest.TestCase):
         self.assertTrue(ok, f"福利厚生記載なしで必須条件NGになった（⑤は削除済みのはず）: {reason}")
 
     def test_phase1_ng_industry_still_blocks(self):
-        """広告代理店・デジタルマーケ等は引き続き必須条件NGになる（①は維持）."""
+        """残るメディア系キーワードは引き続き必須条件NGになる（①は維持）.
+
+        2026-06-26改定で広告代理店・総合広告・PR会社・マーケティング会社はNG解除。
+        """
         ng_cases = [
-            ("広告代理店", "株式会社テスト広告"),
             ("デジタルマーケティング", "テストマーケ株式会社"),
-            ("PR会社", "株式会社テストPR"),
+            ("出版社", "株式会社テスト出版"),
+            ("クリエイティブエージェンシー", "株式会社テストクリエイティブ"),
         ]
         for industry, company_name in ng_cases:
             with self.subTest(industry=industry):
