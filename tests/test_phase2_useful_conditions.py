@@ -374,7 +374,7 @@ class TestEvaluateRankV2Integration(unittest.TestCase):
         """
         company_info = {
             "company_name": "サンプル株式会社",
-            "industry": "デジタルマーケティング",
+            "industry": "出版社",
             "employee_count": "100",
             "address": "東京都港区",
         }

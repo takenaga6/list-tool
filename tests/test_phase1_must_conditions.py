@@ -75,7 +75,7 @@ class TestPhase1MustConditions(unittest.TestCase):
     def test_remaining_media_keyword_ng(self):
         company_info = {
             "company_name": "株式会社サンプル",
-            "industry": "デジタルマーケティング",
+            "industry": "出版社",
             "employee_count": "100",
         }
         ok, reason = check_phase1_must_conditions(company_info, _STD_PAGE_TEXT)
@@ -97,16 +97,28 @@ class TestPhase1MustConditions(unittest.TestCase):
             f"想定外のNG理由: {reason}",
         )
 
-    # 大手プライム子会社例外: 伊藤忠系の総合商社は救済される
+    # 大手プライム子会社例外: 受託SI（レッドオーシャン）系の子会社は救済される
+    # ※「総合商社」は 2026-06-26 にレッドオーシャン必須NGから撤廃したため、
+    #   例外ロジックの検証には残存するレッドオーシャン業種（受託開発）を使う
     def test_prime_subsidiary_redocean_exception(self):
         company_info = {
             "company_name": "伊藤忠○○株式会社",
-            "industry": "総合商社",
+            "industry": "受託開発",
             "employee_count": "100",
         }
         page_text = _STD_PAGE_TEXT + " 当社は伊藤忠商事の連結子会社です。"
         ok, reason = check_phase1_must_conditions(company_info, page_text)
         self.assertTrue(ok, f"プライム子会社例外が効いていない: {reason}")
+
+    # 「総合商社」は必須NGから撤廃 → 単独でも通過する（2026-06-26）
+    def test_general_trading_company_now_allowed(self):
+        company_info = {
+            "company_name": "サンプル商事株式会社",
+            "industry": "総合商社",
+            "employee_count": "100",
+        }
+        ok, reason = check_phase1_must_conditions(company_info, _STD_PAGE_TEXT)
+        self.assertTrue(ok, f"総合商社がNGのまま: {reason}")
 
     # Phase 5: 健康経営記載なしは必須条件から削除 → 通過（加点シグナル判定に降格）
     def test_no_kenkokeiei_ng(self):
@@ -192,7 +204,7 @@ class TestPreScreenPhase1(unittest.TestCase):
         result, reason = pre_screen({
             "url": "https://example.co.jp/",
             "title": "株式会社サンプル",
-            "snippet": "デジタルマーケティングを提供",
+            "snippet": "メディア運営を手がけています",
         })
         self.assertFalse(result)
         self.assertIn("NG業種(広告/メディア)", reason)
@@ -227,7 +239,7 @@ class TestEvaluateRankIntegration(unittest.TestCase):
         # 残るメディア系キーワードは evaluate_rank でも必須条件NGになる
         company_info = {
             "company_name": "株式会社サンプル",
-            "industry": "デジタルマーケティング",
+            "industry": "出版社",
             "employee_count": "50",
         }
         result = evaluate_rank(
