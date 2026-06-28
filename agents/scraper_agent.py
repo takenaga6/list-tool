@@ -213,11 +213,25 @@ COMPANY_NAME_PATTERNS = [
     r"([^\s「」【】\n\r<]{1,30}(?:株式会社|合同会社|有限会社))",
 ]
 
+# 従業員数の抽出パターン（confidence高い順・最初に有効値が取れたものを採用）。
+# group(1)=人数の数字（カンマ・全角可）。「名」だけでなく「人」「単位なし(数/総数等の
+# 明示時)」「(連結)等の括弧挟み」「約/範囲」「英語」も拾う（取りこぼし対策 2026-06-26）。
+_EMP_KW = r"(?:従業員|社員|スタッフ|在籍者|在籍|人員)"
+# キーワード直後の橋渡し: 数/総数/総員/人数（任意）+ 括弧(連結/単体等・任意) + 区切り + 約(任意)
+_EMP_BRIDGE = r"(?:数|総数|総員|人数)?\s*(?:[（(][^）()]{0,12}[）)])?\s*[:：]?\s*(?:約|およそ)?\s*"
+_EMP_NUM = r"([0-9０-９][0-9０-９,，]*)"
+_EMP_RANGE = r"(?:\s*[〜~～－—\-]\s*[0-9０-９,，]+)?"  # 「50〜60名」等は下限を採用
+
 EMPLOYEE_PATTERNS = [
-    r"従業員[数人]?\s*[：:\s]*(\d+)\s*名",
-    r"社員[数人]?\s*[：:\s]*(\d+)\s*名",
-    r"スタッフ[数人]?\s*[：:\s]*(\d+)\s*名",
-    r"(\d+)\s*名(?:のスタッフ|の社員|の従業員)",
+    # ① キーワード(+数/総数/括弧/約) + 数字 + 任意範囲 + 名/人
+    _EMP_KW + _EMP_BRIDGE + _EMP_NUM + _EMP_RANGE + r"\s*[名人]",
+    # ② 接尾形: 50名/50人 の(スタッフ/社員/従業員)
+    _EMP_NUM + r"\s*[名人](?:の)?(?:スタッフ|社員|従業員)",
+    # ③ キーワード+明示カウント語(数/総数/人数) + 単位なし数字（直後が数字/%/円/万/千でない）
+    r"(?:従業員|社員|スタッフ)(?:数|総数|総員|人数)\s*(?:[（(][^）()]{0,12}[）)])?\s*[:：]?\s*(?:約|およそ)?"
+    + _EMP_NUM + r"(?!\s*[0-9０-９%％円万千])",
+    # ④ 英語: employees / number of employees / headcount / staff
+    r"(?:number\s+of\s+employees|employees|head\s*count|staff)\s*[:：]?\s*(?:approx\.?\s*|about\s+)?([0-9][0-9,]*)",
 ]
 
 # 業種キーワードマップ（テキストから業種を推定）
@@ -765,12 +779,18 @@ def extract_address_parts(text: str) -> tuple[str, str, str]:
     return zip_code, prefecture, full_address
 
 
+def _normalize_emp_digits(s: str) -> int | None:
+    """カンマ・全角数字を含む人数文字列を整数化する。数字でなければ None。"""
+    s = s.replace(",", "").replace("，", "").strip()
+    s = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    return int(s) if s.isdigit() else None
+
+
 def extract_employee_count(text: str) -> str:
     for pattern in EMPLOYEE_PATTERNS:
-        match = re.search(pattern, text)
-        if match:
-            count = int(match.group(1))
-            if 1 <= count <= 10000:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            count = _normalize_emp_digits(match.group(1))
+            if count is not None and 1 <= count <= 10000:
                 return str(count)
     return ""
 
@@ -909,12 +929,10 @@ def scrape_company_info(
                 if m:
                     info["phone"] = re.sub(r"[^\d\-]", "", m.group(1))
                     break
-            # 従業員数
-            for pat in EMPLOYEE_PATTERNS:
-                m = re.search(pat, text)
-                if m:
-                    info["employee_count"] = m.group(1)
-                    break
+            # 従業員数（正規化込みの共通関数を使用）
+            _emp = extract_employee_count(text)
+            if _emp:
+                info["employee_count"] = _emp
             # 都道府県（3ソース多数決）
             _zip_minimal = ""
             _zm = re.search(r"〒\s*(\d{3}[-ー]\d{4})", text)
