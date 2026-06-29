@@ -855,6 +855,67 @@ def validate_company_info(info: dict) -> dict:
     return info
 
 
+# 会社概要系リンクの判定キーワード（優先度順。テキスト or href に含まれれば候補）
+# 固定パス当てずっぽうでは到達できないURL（例: /pages/2/）にも、人間と同じく
+# 「会社概要」リンクを辿ることで到達するためのキーワード（2026-06-26）。
+_ABOUT_LINK_KEYWORDS = [
+    # 高優先（日本語・明確）
+    "会社概要", "会社案内", "企業情報", "会社情報", "企業概要", "会社データ",
+    "事業概要", "企業データ", "会社案内・沿革",
+    # 中優先（日本語・やや広い）
+    "概要", "沿革", "会社", "企業",
+    # 英語・URLパス系
+    "company", "corporate", "aboutus", "about-us", "about_us", "about",
+    "profile", "outline", "overview", "gaiyou", "gaiyo", "kaisha", "kaisya",
+]
+
+
+def find_about_links(soup, base_url: str, limit: int = 6) -> list[str]:
+    """ページ内の `<a>` から会社概要系リンクの実URLを優先度順で返す（同一ドメインのみ）。
+
+    固定パス（SUB_PAGE_PATHS）の当てずっぽうでは届かない、サイト独自のURL構成
+    （例: /pages/2/、/company/guide/ 等）に到達するために使う。
+
+    Args:
+        soup: 解析済みの BeautifulSoup（None可）
+        base_url: 相対URL解決の基準（通常はそのページのURL）
+        limit: 返す最大件数
+
+    Returns:
+        会社概要らしさの優先度順に並べた、同一ドメインの絶対URLリスト。
+    """
+    if soup is None:
+        return []
+    own = urlparse(base_url).netloc.replace("www.", "")
+    scored: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        full = urljoin(base_url, href)
+        parsed = urlparse(full)
+        if parsed.scheme not in ("http", "https"):
+            continue
+        # 同一ドメインのみ（サブドメインは許容）
+        if not own or own not in parsed.netloc.replace("www.", ""):
+            continue
+        # クエリ・フラグメントを除いた正規化URLで重複除去
+        norm = parsed._replace(fragment="").geturl()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        label = a.get_text(" ", strip=True) or ""
+        haystack = (label + " " + href).lower()
+        for i, kw in enumerate(_ABOUT_LINK_KEYWORDS):
+            # 日本語キーワードはラベル/href両方、英語キーワードは小文字化して照合
+            if kw in label or kw in href or kw.lower() in haystack:
+                scored.append((i, full))
+                break
+    scored.sort(key=lambda x: x[0])
+    return [u for _, u in scored[:limit]]
+
+
 def scrape_company_info(
     url: str,
     is_media_page: bool = False,
@@ -971,24 +1032,60 @@ def scrape_company_info(
         if not info["company_name"] and top_soup:
             info["company_name"] = extract_company_name(top_soup, top_text)
 
-    # ── ② トップページで3項目のいずれかが未取得 → サブページを順番に試す ──
-    if (not extract_employee_count(all_text)
-            or not extract_phone(all_text, main_soup)
-            or not extract_representative(all_text)):
-        for _path in SUB_PAGE_PATHS:
-            _sub_url = target_url.rstrip("/") + _path
+    # ── ② トップで3項目のいずれかが未取得 → 会社概要リンクを"辿る"（最大2階層）──
+    # 旧実装は固定パス（/company 等）の当てずっぽうのみで、サイト独自URL
+    # （例: /pages/2/）の会社概要に到達できず従業員数を取りこぼしていた。
+    # 人間と同じく「会社概要」リンクの実URLを辿る方式へ変更（2026-06-26）。
+    def _have_three(_soup) -> bool:
+        return bool(extract_employee_count(all_text)
+                    and extract_phone(all_text, _soup)
+                    and extract_representative(all_text))
+
+    _last_soup = main_soup
+    if not _have_three(main_soup):
+        _visited = {target_url.rstrip("/")}
+        # 1階層目: トップページの会社概要系リンク
+        _queue = find_about_links(main_soup, target_url, limit=6)
+        _fetched = 0
+        _MAX_FETCH = 6  # 1社あたりの追加取得上限（暴走防止）
+        while _queue and _fetched < _MAX_FETCH and not _have_three(_last_soup):
+            _sub_url = _queue.pop(0)
+            if _sub_url.rstrip("/") in _visited:
+                continue
+            _visited.add(_sub_url.rstrip("/"))
             _sub_text, _sub_soup = get_page_text(_sub_url)
+            _fetched += 1
             if not _sub_text:
                 continue
             all_text += " " + _sub_text
+            _last_soup = _sub_soup or _last_soup
             if not info["company_name"] and _sub_soup:
                 info["company_name"] = extract_company_name(_sub_soup, _sub_text)
-            # 3項目すべて揃ったら終了
-            if (extract_employee_count(all_text)
-                    and extract_phone(all_text, _sub_soup)
-                    and extract_representative(all_text)):
-                logger.debug(f"サブページで3項目取得完了: {_sub_url}")
+            # 2階層目: この会社概要ページ内の更なる会社概要系リンクを後ろに追加
+            for _nxt in find_about_links(_sub_soup, _sub_url, limit=3):
+                if _nxt.rstrip("/") not in _visited and _nxt not in _queue:
+                    _queue.append(_nxt)
+            if _have_three(_sub_soup):
+                logger.debug(f"会社概要リンク追従で3項目取得完了: {_sub_url}")
                 break
+
+        # フォールバック: リンク追従で取れない場合は旧固定パスも試す
+        if not _have_three(_last_soup):
+            for _path in SUB_PAGE_PATHS:
+                _sub_url = target_url.rstrip("/") + _path
+                if _sub_url.rstrip("/") in _visited:
+                    continue
+                _visited.add(_sub_url.rstrip("/"))
+                _sub_text, _sub_soup = get_page_text(_sub_url)
+                if not _sub_text:
+                    continue
+                all_text += " " + _sub_text
+                _last_soup = _sub_soup or _last_soup
+                if not info["company_name"] and _sub_soup:
+                    info["company_name"] = extract_company_name(_sub_soup, _sub_text)
+                if _have_three(_sub_soup):
+                    logger.debug(f"固定パスで3項目取得完了: {_sub_url}")
+                    break
 
     if not all_text.strip():
         # JSレンダリングサイト等でテキスト0文字の場合、検索スニペットで補完
